@@ -1,6 +1,7 @@
 name: PiP probe (一時)
 on:
-  workflow_dispatch:
+  push:
+    branches: ["wip/pip2"]
 jobs:
   probe:
     runs-on: macos-26
