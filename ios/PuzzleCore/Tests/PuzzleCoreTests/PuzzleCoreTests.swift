@@ -437,3 +437,82 @@ final class ProtocolTests: XCTestCase {
         XCTAssertFalse(s.feed(rd), "終了後は受け付けない")
     }
 }
+
+// MARK: - 小窓（ピクチャ・イン・ピクチャ）の状態管理
+
+final class PiPStateTests: XCTestCase {
+
+    private func ready() -> PiPState {
+        var s = PiPState(supported: true)
+        s.setPrepared()
+        s.setPossible(true)
+        return s
+    }
+
+    func testUnsupportedDisablesButtonWithReason() {
+        var s = PiPState(supported: false)
+        s.setPrepared()
+        XCTAssertFalse(s.buttonEnabled, "非対応ならボタンは押せない")
+        XCTAssertEqual(s.statusText, PiPState.unavailableMessage)
+        XCTAssertTrue(s.diagnostics.contains("PiP対応：いいえ"))
+        XCTAssertTrue(s.diagnostics.contains { $0.hasPrefix("開始できない理由：") && $0.contains("対応していません") })
+        XCTAssertEqual(s.pressButton(), .none, "押しても開始しない")
+        XCTAssertNotNil(s.lastError, "押したら理由をエラー欄に出す（何も起きない状態にしない）")
+    }
+
+    func testNotPossibleYetDisablesButton() {
+        var s = PiPState(supported: true)
+        s.setPrepared()
+        XCTAssertFalse(s.buttonEnabled)
+        XCTAssertTrue(s.unavailableReason?.contains("開始できる状態") == true)
+        s.setPossible(true)
+        XCTAssertTrue(s.buttonEnabled)
+        XCTAssertNil(s.unavailableReason)
+    }
+
+    func testDoubleStartIsPrevented() {
+        var s = ready()
+        XCTAssertEqual(s.pressButton(), .start)
+        XCTAssertFalse(s.buttonEnabled, "開始中はボタンを押せない")
+        XCTAssertEqual(s.pressButton(), .none, "連打しても二重に開始しない")
+        XCTAssertEqual(s.pressButton(), .none)
+        XCTAssertEqual(s.startRequests, 1)
+        s.didStart()
+        XCTAssertTrue(s.active)
+        XCTAssertTrue(s.buttonEnabled, "実行中は「閉じる」として押せる")
+        XCTAssertEqual(s.pressButton(), .stop)
+        s.didStop()
+        XCTAssertFalse(s.active)
+        XCTAssertEqual(s.pressButton(), .start)
+        XCTAssertEqual(s.startRequests, 2)
+    }
+
+    func testStartFailureShowsError() {
+        var s = ready()
+        _ = s.pressButton()
+        s.failedToStart("テストの理由")
+        XCTAssertFalse(s.active)
+        XCTAssertFalse(s.starting)
+        XCTAssertEqual(s.lastError, "小窓を開始できませんでした：テストの理由")
+        XCTAssertEqual(s.statusText, s.lastError)
+        XCTAssertTrue(s.diagnostics.contains("最後に発生したエラー：小窓を開始できませんでした：テストの理由"))
+        XCTAssertTrue(s.buttonEnabled, "失敗後はもう一度押せる")
+        XCTAssertEqual(s.pressButton(), .start)
+        XCTAssertNil(s.lastError, "やり直したらエラーを消す")
+    }
+
+    func testNoResponseTimesOutWithMessage() {
+        var s = ready()
+        _ = s.pressButton()
+        s.startTimedOut()
+        XCTAssertFalse(s.starting)
+        XCTAssertEqual(s.lastError, PiPState.notStartedMessage)
+        // 開始済みならタイムアウトは何もしない
+        var t = ready()
+        _ = t.pressButton()
+        t.didStart()
+        t.startTimedOut()
+        XCTAssertNil(t.lastError)
+        XCTAssertTrue(t.active)
+    }
+}

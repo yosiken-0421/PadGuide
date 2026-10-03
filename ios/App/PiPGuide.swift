@@ -16,11 +16,15 @@ import PuzzleCore
 /// - 開始・停止・失敗を画面の状態に反映し、連打による二重起動を防ぐ
 @MainActor
 final class PiPGuide: NSObject, ObservableObject {
-    @Published private(set) var supported: Bool
-    @Published private(set) var possible = false
-    @Published private(set) var active = false
-    @Published private(set) var starting = false
-    @Published private(set) var lastError: String?
+    @Published private(set) var state: PiPState
+    var supported: Bool { state.supported }
+    var possible: Bool { state.possible }
+    var active: Bool { state.active }
+    var starting: Bool { state.starting }
+    var lastError: String? { state.lastError }
+
+    /// UI テスト用：開始の失敗を再現する（-pipSimulateFailure）
+    private let simulateFailure = ProcessInfo.processInfo.arguments.contains("-pipSimulateFailure")
 
     let displayLayer = AVSampleBufferDisplayLayer()
     private var controller: AVPictureInPictureController?
@@ -34,7 +38,8 @@ final class PiPGuide: NSObject, ObservableObject {
     static let renderSize = CGSize(width: 600, height: 560)
 
     override init() {
-        supported = AVPictureInPictureController.isPictureInPictureSupported()
+        let forced = ProcessInfo.processInfo.arguments.contains("-pipSimulateFailure")
+        state = PiPState(supported: forced || AVPictureInPictureController.isPictureInPictureSupported())
         super.init()
         displayLayer.videoGravity = .resizeAspect
         var tb: CMTimebase?
@@ -53,9 +58,16 @@ final class PiPGuide: NSObject, ObservableObject {
         guard controller == nil else { return }
         // 小窓には「再生」用の音声設定が必要（音は鳴らさない。ゲームの音を止めないよう他の音と混ぜる設定）
         try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback, options: [.mixWithOthers])
+        // ゲームへ切り替えたときの自動開始にも必要なので、最初から有効にしておく（他の音は止めない）
+        try? AVAudioSession.sharedInstance().setActive(true)
         refresh(force: true)
         timer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refresh(force: false) }
+        }
+        if simulateFailure {
+            state.setPrepared()
+            state.setPossible(true)
+            return
         }
         guard supported else { return }
         let source = AVPictureInPictureController.ContentSource(sampleBufferDisplayLayer: displayLayer, playbackDelegate: self)
@@ -66,47 +78,41 @@ final class PiPGuide: NSObject, ObservableObject {
         c.canStartPictureInPictureAutomaticallyFromInline = autoStart
         possibleObservation = c.observe(\.isPictureInPicturePossible, options: [.initial, .new]) { [weak self] ctl, _ in
             let p = ctl.isPictureInPicturePossible
-            Task { @MainActor in self?.possible = p }
+            Task { @MainActor in self?.state.setPossible(p) }
         }
         controller = c
+        state.setPrepared()
     }
 
-    /// 開始できないときの具体的な理由（開始できるなら nil）
-    var unavailableReason: String? {
-        if !supported { return "この端末は小窓表示（ピクチャ・イン・ピクチャ）に対応していません" }
-        if controller == nil { return "小窓の準備がまだできていません" }
-        if !possible { return "小窓を開始できる状態になっていません。少し待ってからもう一度お試しください" }
-        return nil
-    }
-
-    var canToggle: Bool { active || (unavailableReason == nil && !starting) }
+    var unavailableReason: String? { state.unavailableReason }
+    var canToggle: Bool { state.buttonEnabled }
 
     func toggle() {
-        guard let c = controller else { lastError = unavailableReason; return }
-        if c.isPictureInPictureActive {
-            c.stopPictureInPicture()
-            return
-        }
-        guard !starting else { return }                    // 連打・二重起動を防ぐ
-        guard c.isPictureInPicturePossible else {
-            lastError = unavailableReason
-            return
-        }
-        do {
-            try AVAudioSession.sharedInstance().setActive(true)
-        } catch {
-            lastError = "音声の設定に失敗しました：\(error.localizedDescription)"
-            return
-        }
-        lastError = nil
-        starting = true
-        refresh(force: true)
-        c.startPictureInPicture()
-        // 何も返ってこない場合も「押しても何も起きない」状態にしない
-        DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
-            guard let self, self.starting, !self.active else { return }
-            self.starting = false
-            self.lastError = "小窓が開始されませんでした。もう一度押してください"
+        switch state.pressButton() {
+        case .none:
+            return                                         // 開始中の連打・開始できない状態（理由は state に入る）
+        case .stop:
+            controller?.stopPictureInPicture()
+        case .start:
+            if simulateFailure {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                    self?.state.failedToStart("テスト用に失敗を再現しました")
+                }
+                return
+            }
+            guard let c = controller else { state.failedToStart("小窓の準備ができていません"); return }
+            do {
+                try AVAudioSession.sharedInstance().setActive(true)
+            } catch {
+                state.failedToStart("音声の設定に失敗しました（\(error.localizedDescription)）")
+                return
+            }
+            refresh(force: true)
+            c.startPictureInPicture()
+            // 開始も失敗も通知されない場合も、「押しても何も起きない」状態にしない
+            DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
+                self?.state.startTimedOut()
+            }
         }
     }
 
@@ -120,8 +126,8 @@ final class PiPGuide: NSObject, ObservableObject {
             lastKey = key
             lastImage = Self.render(board: board, res: res)
         }
-        // 内容が同じでも約1秒ごとに送り直す（小窓が止まって見えないように）
-        if changed || framesSent % 4 == 0, let img = lastImage { enqueue(img) }
+        // 内容が同じでも送り続ける（小窓が黒くならないように）
+        if let img = lastImage { enqueue(img) }
         framesSent += 1
     }
 
@@ -154,7 +160,9 @@ final class PiPGuide: NSObject, ObservableObject {
         if let arr = CMSampleBufferGetSampleAttachmentsArray(sb, createIfNecessary: true) as? [NSMutableDictionary], let a = arr.first {
             a[kCMSampleAttachmentKey_DisplayImmediately] = true
         }
-        if displayLayer.status == .failed { displayLayer.flush() }
+        // 画面ロックなどで描画が止まったら、黒くなる前にやり直す
+        if displayLayer.status == .failed || displayLayer.requiresFlushToResumeDecoding { displayLayer.flush() }
+        guard displayLayer.isReadyForMoreMediaData else { return }
         displayLayer.enqueue(sb)
     }
 
@@ -264,29 +272,15 @@ final class PiPGuide: NSObject, ObservableObject {
 // MARK: - デリゲート（開始・停止・失敗を画面に反映）
 
 extension PiPGuide: AVPictureInPictureControllerDelegate {
-    nonisolated func pictureInPictureControllerWillStartPictureInPicture(_ c: AVPictureInPictureController) {
-        Task { @MainActor in self.starting = true }
-    }
     nonisolated func pictureInPictureControllerDidStartPictureInPicture(_ c: AVPictureInPictureController) {
-        Task { @MainActor in
-            self.active = true
-            self.starting = false
-            self.lastError = nil
-        }
+        Task { @MainActor in self.state.didStart() }
     }
     nonisolated func pictureInPictureController(_ c: AVPictureInPictureController, failedToStartPictureInPictureWithError error: Error) {
         let msg = error.localizedDescription
-        Task { @MainActor in
-            self.active = false
-            self.starting = false
-            self.lastError = "小窓を開始できませんでした：\(msg)"
-        }
+        Task { @MainActor in self.state.failedToStart(msg) }
     }
     nonisolated func pictureInPictureControllerDidStopPictureInPicture(_ c: AVPictureInPictureController) {
-        Task { @MainActor in
-            self.active = false
-            self.starting = false
-        }
+        Task { @MainActor in self.state.didStop() }
     }
     nonisolated func pictureInPictureController(_ c: AVPictureInPictureController,
                                                 restoreUserInterfaceForPictureInPictureStopWithCompletionHandler completionHandler: @escaping (Bool) -> Void) {
@@ -350,7 +344,7 @@ struct PiPBar: View {
                     Button {
                         pip.toggle()
                     } label: {
-                        Label(pip.active ? "小窓を閉じる" : (pip.starting ? "小窓を開始しています…" : "小窓で表示"),
+                        Label(pip.active ? "小窓を閉じる" : (pip.starting ? "開始しています…" : "小窓で表示"),
                               systemImage: "pip")
                             .font(.headline)
                     }
@@ -374,12 +368,8 @@ struct PiPBar: View {
             }
             if showDiagnostics {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("PiP対応：\(pip.supported ? "はい" : "いいえ")").accessibilityIdentifier("pipSupported")
-                    Text("PiP開始可能：\(pip.possible ? "はい" : "いいえ")").accessibilityIdentifier("pipPossible")
-                    Text("PiP実行中：\(pip.active ? "はい" : "いいえ")").accessibilityIdentifier("pipActive")
-                    Text("最後に発生したエラー：\(pip.lastError ?? "なし")").accessibilityIdentifier("pipLastError")
-                    if let r = pip.unavailableReason, !pip.active {
-                        Text("開始できない理由：\(r)").accessibilityIdentifier("pipReason")
+                    ForEach(Array(pip.state.diagnostics.enumerated()), id: \.offset) { i, line in
+                        Text(line).accessibilityIdentifier(["pipSupported", "pipPossible", "pipActive", "pipLastError", "pipReason"][min(i, 4)])
                     }
                 }
                 .font(.caption2)
@@ -391,12 +381,5 @@ struct PiPBar: View {
         .background(.bar)
     }
 
-    private var statusText: String {
-        if let e = pip.lastError { return e }
-        if pip.active { return "小窓を表示中です。ゲームに切り替えても表示されます" }
-        if !pip.supported || !pip.possible {
-            return "この端末または現在の状態では小窓表示を開始できません"
-        }
-        return "ゲームに切り替えると、自動で小窓になります"
-    }
+    private var statusText: String { pip.state.statusText }
 }
