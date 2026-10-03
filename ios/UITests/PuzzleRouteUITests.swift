@@ -56,7 +56,8 @@ final class PuzzleRouteUITests: XCTestCase {
         sleep(3)   // 見本盤面の探索（約1秒）を待つ
         let summary = app.staticTexts["routeSummary"]
         XCTAssertTrue(reveal(summary, in: app), "見本盤面のルートが表示される")
-        XCTAssertTrue(reveal(app.descendants(matching: .any)["unknownWarning"], in: app), "不明マスの警告が出る")
+        let warning = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS '不明なマス'")).firstMatch
+        XCTAssertTrue(reveal(warning, in: app), "不明マスの警告が出る")
 
         // 不明マス（上から2段目・左から4列目）をタップして「光」に直す
         let cell = app.buttons["cell-9"]
@@ -68,7 +69,7 @@ final class PuzzleRouteUITests: XCTestCase {
 
         // 修正後に再探索され、警告が消える
         let gone = NSPredicate(format: "exists == false")
-        expectation(for: gone, evaluatedWith: app.descendants(matching: .any)["unknownWarning"])
+        expectation(for: gone, evaluatedWith: app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS '不明なマス'")).firstMatch)
         waitForExpectations(timeout: 15)
         sleep(2)
         XCTAssertTrue(reveal(app.staticTexts["routeSummary"], in: app))
