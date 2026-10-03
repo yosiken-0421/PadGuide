@@ -191,6 +191,16 @@ jobs:
             DEVELOPMENT_TEAM="$TEAM_ID" CODE_SIGN_STYLE=Automatic \
             PD_BUNDLE_PREFIX="$BUNDLE_PREFIX" \
             MARKETING_VERSION="$APP_VERSION" CURRENT_PROJECT_VERSION="$APP_BUILD"
+          # バージョンとビルド番号が正しく入ったか確認（アプリと拡張は同じである必要がある）
+          APP="$RUNNER_TEMP/PuzzleRoute.xcarchive/Products/Applications/PuzzleRoute.app"
+          for P in "$APP/Info.plist" "$APP/PlugIns/Broadcast.appex/Info.plist"; do
+            V=$(/usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" "$P")
+            B=$(/usr/libexec/PlistBuddy -c "Print CFBundleVersion" "$P")
+            echo "${P#$RUNNER_TEMP/}: $V ($B)"
+            if [ "$V" != "$APP_VERSION" ] || [ "$B" != "$APP_BUILD" ]; then
+              echo "::error::バージョン/ビルド番号が想定と違います: $V ($B)、想定 $APP_VERSION ($APP_BUILD)"; exit 1
+            fi
+          done
 
       - name: IPA 書き出し
         id: export
