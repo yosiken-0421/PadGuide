@@ -18,6 +18,7 @@ jobs:
             -destination 'generic/platform=iOS Simulator' -derivedDataPath "$RUNNER_TEMP/dd" CODE_SIGNING_ALLOWED=NO -quiet
       - name: probe devices
         run: |
+          set +e
           RUNTIME=$(xcrun simctl list runtimes -j | python3 -c "
           import sys, json
           rs=[r for r in json.load(sys.stdin)['runtimes'] if r.get('platform')=='iOS' and r.get('isAvailable')]
