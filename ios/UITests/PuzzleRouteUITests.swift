@@ -62,15 +62,22 @@ final class PuzzleRouteUITests: XCTestCase {
         // 不明マス（上から2段目・左から4列目）をタップして「光」に直す
         let cell = app.buttons["cell-9"]
         XCTAssertTrue(revealAbove(cell, in: app), "盤面のマスが表示される")
+        XCTAssertTrue(cell.label.contains("不明"), "対象のマスは不明: \(cell.label)")
         cell.tap()
         let light = app.buttons["光"]
         XCTAssertTrue(light.waitForExistence(timeout: 5), "色の選択肢が出る")
         light.tap()
 
-        // 修正後に再探索され、警告が消える
-        let gone = NSPredicate(format: "exists == false")
-        expectation(for: gone, evaluatedWith: app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS '不明なマス'")).firstMatch)
+        // 修正後：マスが「光」になり、再探索され、警告が消える
+        let fixed = NSPredicate(format: "label CONTAINS '光'")
+        expectation(for: fixed, evaluatedWith: app.buttons["cell-9"])
         waitForExpectations(timeout: 15)
+        let warnQuery = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS '不明なマス'"))
+        for _ in 0..<15 where warnQuery.count > 0 { sleep(1) }
+        if warnQuery.count > 0 {
+            let left = warnQuery.allElementsBoundByIndex.prefix(3).map { "[\($0.elementType.rawValue)] \($0.identifier) \($0.label)" }
+            XCTFail("警告が残っている: \(left.joined(separator: " / ")) / cell-9=\(app.buttons["cell-9"].label)")
+        }
         sleep(2)
         XCTAssertTrue(reveal(app.staticTexts["routeSummary"], in: app))
         XCTAssertTrue(app.staticTexts["routeSummary"].label.contains("コンボ"))
