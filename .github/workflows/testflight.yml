@@ -86,9 +86,9 @@ jobs:
             PD_BUNDLE_PREFIX="$BUNDLE_PREFIX" \
             CURRENT_PROJECT_VERSION="${{ github.run_number }}" 2>&1 | tee "$RUNNER_TEMP/archive.log" || {
               # 失敗理由を Actions の注釈に出す（ログを開かなくても見えるように）
-              grep -iE "error|fail|no profile|provision|signing|certificate" "$RUNNER_TEMP/archive.log" \
-                | grep -v "^\s*$" | sort -u | head -6 | while IFS= read -r l; do echo "::error::${l:0:900}"; done
-              tail -3 "$RUNNER_TEMP/archive.log" | while IFS= read -r l; do echo "::error::[末尾] ${l:0:900}"; done
+              { grep -E ": error:" "$RUNNER_TEMP/archive.log"; grep -iE "error:|no profile|provisioning profile.*(doesn't|not)|certificate" "$RUNNER_TEMP/archive.log"; } \
+                | sed -E 's#^/Users/runner/work/PadGuide/PadGuide/##' | awk '!seen[$0]++' | head -8 | while IFS= read -r l; do echo "::error::${l:0:900}"; done
+              tail -1 "$RUNNER_TEMP/archive.log" | while IFS= read -r l; do echo "::error::[末尾] ${l:0:900}"; done
               exit 1
             }
 
