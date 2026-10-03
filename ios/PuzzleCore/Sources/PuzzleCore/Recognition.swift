@@ -264,12 +264,13 @@ public enum BoardDetector {
                     let hsv = RGB(p.0, p.1, p.2).hsv
                     inner += max(hsv.s, 0.25) * hsv.v
                 }
+                // マスの辺の中点（ドロップの外側）。位置がずれるとここが隣のドロップに重なって明るくなる
                 var outer = 0.0
-                for (fx, fy) in [(0.05, 0.05), (0.95, 0.95)] {
+                for (fx, fy) in [(0.5, 0.03), (0.03, 0.5), (0.97, 0.5), (0.5, 0.97)] {
                     let p = src.rgb(clampX(src, x0 + rect.cell * fx), clampY(src, y0 + rect.cell * fy))
                     outer += RGB(p.0, p.1, p.2).hsv.v
                 }
-                s += inner / 4 - outer / 2 * 0.9
+                s += inner / 4 - outer / 4 * 0.9
             }
         }
         return s / Double(size.count)
