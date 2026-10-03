@@ -69,9 +69,13 @@ final class PuzzleRouteUITests: XCTestCase {
         light.tap()
 
         // 修正後：マスが「光」になり、再探索され、警告が消える
-        let fixed = NSPredicate(format: "label CONTAINS '光'")
-        expectation(for: fixed, evaluatedWith: app.buttons["cell-9"])
-        waitForExpectations(timeout: 15)
+        let cell9 = app.buttons["cell-9"]
+        for _ in 0..<15 where !(cell9.exists && cell9.label.contains("光")) { sleep(1) }
+        if !(cell9.exists && cell9.label.contains("光")) {
+            let btns = app.buttons.allElementsBoundByIndex.prefix(40).map { $0.label.isEmpty ? $0.identifier : $0.label }
+            XCTFail("修正が反映されない: cell-9=\(cell9.exists ? cell9.label : "なし") 光ボタン残り=\(app.buttons["光"].exists) sheets=\(app.sheets.count) alerts=\(app.alerts.count) ボタン=\(btns.joined(separator: ","))")
+            return
+        }
         let warnQuery = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS '不明なマス'"))
         for _ in 0..<15 where warnQuery.count > 0 { sleep(1) }
         if warnQuery.count > 0 {
