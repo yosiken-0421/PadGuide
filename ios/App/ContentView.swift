@@ -21,6 +21,7 @@ struct ContentView: View {
     @State private var showQR = false
     @State private var showDiscovery = false
     @State private var editingCell: Int?
+    @State private var showPicker = false
 
     static let disclaimer = "画面共有はユーザーが開始した場合だけ動作します。画面は端末内または同一ネットワーク内で処理されます。本アプリは操作を自動実行しません。利用するサービスの規約を確認したうえで使用してください。"
 
@@ -43,14 +44,11 @@ struct ContentView: View {
             .navigationTitle("パズルルート")
             .sheet(isPresented: $showQR) { QRScannerSheet().environmentObject(model) }
             .sheet(isPresented: $showDiscovery) { DiscoverySheet().environmentObject(model) }
-            .confirmationDialog("正しいドロップを選んでください",
-                                isPresented: Binding(get: { editingCell != nil }, set: { if !$0 { editingCell = nil } }),
-                                titleVisibility: .visible) {
+            // 編集するマスの番号はダイアログに渡して保持する（閉じる処理と競合して修正が失われないように）
+            .confirmationDialog("正しいドロップを選んでください", isPresented: $showPicker,
+                                titleVisibility: .visible, presenting: editingCell) { index in
                 ForEach(OrbKind.allCases, id: \.self) { k in
-                    Button(k.label) {
-                        if let i = editingCell { model.correct(index: i, to: k) }
-                        editingCell = nil
-                    }
+                    Button(k.label) { model.correct(index: index, to: k) }
                 }
             }
             .onAppear {
@@ -121,7 +119,10 @@ struct ContentView: View {
     @ViewBuilder private var boardSection: some View {
         Section {
             if let b = model.board {
-                BoardView(board: b, confidence: model.confidence, result: model.result) { i in editingCell = i }
+                BoardView(board: b, confidence: model.confidence, result: model.result) { i in
+                    editingCell = i
+                    showPicker = true
+                }
                     .listRowInsets(EdgeInsets(top: 8, leading: 8, bottom: 8, trailing: 8))
                 if let r = model.result {
                     if r.status == "ok" {
