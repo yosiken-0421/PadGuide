@@ -27,9 +27,35 @@ jobs:
       - name: Save API key
         run: |
           mkdir -p "$RUNNER_TEMP/keys"
-          printf '%s' "$ASC_KEY_P8" > "$RUNNER_TEMP/keys/AuthKey.p8"
+          # iPhone でコピーすると改行が消えたり余計な文字が入ったりするので、鍵の形式を整え直す
+          python3 - <<'PY'
+          import os, re, base64, sys
+          raw = os.environ["ASC_KEY_P8"]
+          body = re.sub(r"-----(BEGIN|END)[^-]*-----", "", raw)
+          body = re.sub(r"[^A-Za-z0-9+/=]", "", body)
+          try:
+              der = base64.b64decode(body + "=" * (-len(body) % 4))
+          except Exception:
+              der = b""
+          if len(der) < 100:
+              print("::error::ASC_KEY_P8 の中身が正しくありません（取り出せた鍵データ %d バイト）。.p8 の中身を全部貼り直してください" % len(der))
+              sys.exit(1)
+          b64 = base64.b64encode(der).decode()
+          pem = "-----BEGIN PRIVATE KEY-----\n" + "\n".join(b64[i:i+64] for i in range(0, len(b64), 64)) + "\n-----END PRIVATE KEY-----\n"
+          open(os.path.join(os.environ["RUNNER_TEMP"], "keys", "AuthKey.p8"), "w").write(pem)
+          print("鍵の形式を確認しました（%d バイト）" % len(der))
+          PY
+          # 前後の空白・改行を除いた値を以降のステップで使う
+          {
+            echo "KEY_ID=$(printf '%s' "$ASC_KEY_ID" | tr -d '[:space:]')"
+            echo "ISSUER_ID=$(printf '%s' "$ASC_ISSUER_ID" | tr -d '[:space:]')"
+            echo "TEAM_ID=$(printf '%s' "$APPLE_TEAM_ID" | tr -d '[:space:]')"
+          } >> "$GITHUB_ENV"
         env:
           ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
 
       - name: Generate Xcode project
         working-directory: ios
@@ -47,9 +73,9 @@ jobs:
             -archivePath "$RUNNER_TEMP/PadGuide.xcarchive" \
             -allowProvisioningUpdates \
             -authenticationKeyPath "$RUNNER_TEMP/keys/AuthKey.p8" \
-            -authenticationKeyID "${{ secrets.ASC_KEY_ID }}" \
-            -authenticationKeyIssuerID "${{ secrets.ASC_ISSUER_ID }}" \
-            DEVELOPMENT_TEAM="${{ secrets.APPLE_TEAM_ID }}" \
+            -authenticationKeyID "$KEY_ID" \
+            -authenticationKeyIssuerID "$ISSUER_ID" \
+            DEVELOPMENT_TEAM="$TEAM_ID" \
             PD_BUNDLE_PREFIX="$BUNDLE_PREFIX" \
             CURRENT_PROJECT_VERSION="${{ github.run_number }}" 2>&1 | tee "$RUNNER_TEMP/archive.log" || {
               # 失敗理由を Actions の注釈に出す（ログを開かなくても見えるように）
@@ -68,7 +94,7 @@ jobs:
           <plist version="1.0"><dict>
             <key>method</key><string>app-store-connect</string>
             <key>destination</key><string>upload</string>
-            <key>teamID</key><string>${{ secrets.APPLE_TEAM_ID }}</string>
+            <key>teamID</key><string>$TEAM_ID</string>
             <key>signingStyle</key><string>automatic</string>
             <key>manageAppVersionAndBuildNumber</key><false/>
           </dict></plist>
@@ -79,8 +105,8 @@ jobs:
             -exportPath "$RUNNER_TEMP/export" \
             -allowProvisioningUpdates \
             -authenticationKeyPath "$RUNNER_TEMP/keys/AuthKey.p8" \
-            -authenticationKeyID "${{ secrets.ASC_KEY_ID }}" \
-            -authenticationKeyIssuerID "${{ secrets.ASC_ISSUER_ID }}" 2>&1 | tee "$RUNNER_TEMP/export.log" || {
+            -authenticationKeyID "$KEY_ID" \
+            -authenticationKeyIssuerID "$ISSUER_ID" 2>&1 | tee "$RUNNER_TEMP/export.log" || {
               grep -iE "error|fail" "$RUNNER_TEMP/export.log" | sort -u | head -6 | while IFS= read -r l; do echo "::error::${l:0:900}"; done
               tail -3 "$RUNNER_TEMP/export.log" | while IFS= read -r l; do echo "::error::[末尾] ${l:0:900}"; done
               exit 1
