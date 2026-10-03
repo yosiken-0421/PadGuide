@@ -10,7 +10,7 @@ settings:
     CODE_SIGN_STYLE: Automatic
     MARKETING_VERSION: "1.0"
     CURRENT_PROJECT_VERSION: "1"         # GitHub Actions では実行番号で上書き（毎回増える）
-    PD_BUNDLE_PREFIX: com.pdguide        # ← 自分用に変更（例 com.yourname.padguide）。Variables の BUNDLE_PREFIX で上書き可
+    PD_BUNDLE_PREFIX: com.yosiken0421.padguide
     PD_APP_GROUP: group.$(PD_BUNDLE_PREFIX)
 targets:
   PadGuide:

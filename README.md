@@ -50,7 +50,7 @@ PC がある場合は `android` フォルダを Android Studio で開いて実�
 - **Mac がある**：`ios` フォルダで `brew install xcodegen && xcodegen generate` → `PadGuide.xcodeproj` を Xcode で開く → `PD_BUNDLE_PREFIX` を自分用に変更 → Signing で自分のチームを選んで iPhone に実行
 
 ### TestFlight で入れる（iPhone のブラウザだけで完結）
-`○○` は自分用の文字列（例 `com.taro.padguide`）。世界で重複しない名前にしてください。
+`○○` は `com.yosiken0421.padguide`（設定済み。GitHub の Variables 登録は不要）
 
 1. **Apple Developer Program に登録**（developer.apple.com → Account → 登録。承認に最大2日ほど）
 2. **Team ID を控える**：developer.apple.com/account →「メンバーシップの詳細」
@@ -63,7 +63,6 @@ PC がある場合は `android` フォルダを Android Studio で開いて実�
    - .p8 ファイルをダウンロード（**1回しか落とせません**）→ ファイルアプリ等で中身のテキストをコピー
 6. **GitHub の設定**（リポジトリの Settings → Secrets and variables → Actions）
    - Secrets：`ASC_KEY_ID`（キーID）、`ASC_ISSUER_ID`、`ASC_KEY_P8`（.p8 の中身まるごと）、`APPLE_TEAM_ID`
-   - Variables：`BUNDLE_PREFIX` = `○○`
 7. **実行**：Actions →「iOS TestFlight」→「Run workflow」（20分ほど）
 8. **インストール**：App Store Connect → アプリ → TestFlight →「内部テスト」でグループを作り自分を追加 → iPhone に TestFlight アプリを入れて招待から入れる
 

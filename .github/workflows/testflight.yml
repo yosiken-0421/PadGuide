@@ -8,7 +8,7 @@ jobs:
   testflight:
     runs-on: macos-15
     env:
-      BUNDLE_PREFIX: ${{ vars.BUNDLE_PREFIX }}
+      BUNDLE_PREFIX: ${{ vars.BUNDLE_PREFIX || 'com.yosiken0421.padguide' }}
     steps:
       - uses: actions/checkout@v4
 
