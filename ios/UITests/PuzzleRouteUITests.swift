@@ -47,6 +47,22 @@ final class PuzzleRouteUITests: XCTestCase {
         XCTAssertTrue(notice.label.contains("本アプリは操作を自動実行しません"))
     }
 
+    /// 小窓（ピクチャ・イン・ピクチャ）表示は提供しない。押しても何も起きないボタンを残さず、代わりの見かたを説明する
+    func testNoPictureInPictureButtonAndExplainsAlternatives() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-uitest", "-demoBoard"]
+        app.launch()
+        XCTAssertTrue(app.navigationBars["パズルルート"].waitForExistence(timeout: 10))
+
+        let notice = app.staticTexts["overlayNotice"]
+        XCTAssertTrue(reveal(notice, in: app), "ルートの見かたの説明が表示される")
+        XCTAssertTrue(notice.label.contains("重ねて表示することはできません"))
+        XCTAssertTrue(notice.label.contains("PC ビューアー"))
+
+        let pipButtons = app.buttons.matching(NSPredicate(format: "label CONTAINS '小窓' OR label CONTAINS 'ピクチャ・イン・ピクチャ'"))
+        XCTAssertEqual(pipButtons.count, 0, "小窓表示のボタンは存在しない")
+    }
+
     func testManualCorrectionAndResearch() {
         let app = XCUIApplication()
         app.launchArguments = ["-uitest", "-demoBoard"]

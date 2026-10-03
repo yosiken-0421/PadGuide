@@ -207,6 +207,10 @@ jobs:
             MARKETING_VERSION="$APP_VERSION" CURRENT_PROJECT_VERSION="$APP_BUILD"
           # バージョンとビルド番号が正しく入ったか確認（アプリと拡張は同じである必要がある）
           APP="$RUNNER_TEMP/PuzzleRoute.xcarchive/Products/Applications/PuzzleRoute.app"
+          # 使わないバックグラウンド動作（音声など）を宣言していないこと
+          if /usr/libexec/PlistBuddy -c "Print UIBackgroundModes" "$APP/Info.plist" >/dev/null 2>&1; then
+            echo "::error::Info.plist に不要な UIBackgroundModes が入っています"; exit 1
+          fi
           for P in "$APP/Info.plist" "$APP/PlugIns/Broadcast.appex/Info.plist"; do
             V=$(/usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" "$P")
             B=$(/usr/libexec/PlistBuddy -c "Print CFBundleVersion" "$P")

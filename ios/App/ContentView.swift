@@ -4,19 +4,16 @@ import PuzzleCore
 @main
 struct PuzzleRouteApp: App {
     @StateObject private var model = AppModel()
-    @StateObject private var pip = PiPGuide()
     var body: some Scene {
         WindowGroup {
             ContentView()
                 .environmentObject(model)
-                .environmentObject(pip)
         }
     }
 }
 
 struct ContentView: View {
     @EnvironmentObject var model: AppModel
-    @EnvironmentObject var pip: PiPGuide
     @State private var picker = BroadcastPickerHolder()
     @State private var showQR = false
     @State private var showDiscovery = false
@@ -33,7 +30,7 @@ struct ContentView: View {
                 pcSection
                 boardSection
                 settingsSection
-                pipSection
+                overlaySection
                 learnedSection
                 Section {
                     Text(Self.disclaimer)
@@ -50,9 +47,6 @@ struct ContentView: View {
                 ForEach(OrbKind.allCases, id: \.self) { k in
                     Button(k.label) { model.correct(index: index, to: k) }
                 }
-            }
-            .onAppear {
-                if !model.isUITest { pip.attach { [weak m = model] in (m?.board, m?.result) } }
             }
         }
     }
@@ -192,17 +186,18 @@ struct ContentView: View {
         }
     }
 
-    @ViewBuilder private var pipSection: some View {
-        if pip.isSupported && !model.isUITest {
-            Section {
-                Button(pip.active ? "小窓を閉じる" : "小窓（ピクチャ・イン・ピクチャ）で表示") { pip.toggle() }
-            } header: {
-                Text("PC がないとき")
-            } footer: {
-                Text("盤面とルートの図を小窓で表示します。小窓をゲーム画面の盤面に重ならない位置へ動かして使います。")
-            }
+    /// ゲーム画面の上には表示できないことの説明（小窓表示は提供しない）
+    private var overlaySection: some View {
+        Section {
+            Text(Self.overlayNotice)
+                .font(.footnote)
+                .accessibilityIdentifier("overlayNotice")
+        } header: {
+            Text("ルートの見かた")
         }
     }
+
+    static let overlayNotice = "iPhone では、ゲーム画面の上にルートを重ねて表示することはできません。ルートは、このアプリの「認識した盤面」か、PC ビューアーで確認してください。PC ビューアーを使うと、ゲームを操作しながら PC の画面でルートを見られます。"
 
     private var learnedSection: some View {
         Section {
