@@ -96,6 +96,8 @@ PC ビューアーの見方：
 
 `version`（表示バージョン）と `build_number`（ビルド番号）は空のままで大丈夫です。
 
+`cleanup_dev_certs` は、通常はチェック不要です。GitHub の Mac は実行のたびに開発用証明書「Apple Development: Created via API」を 1 つ自動作成するため、何度も実行すると Apple の**証明書の上限**に達して止まることがあります。そのときは `cleanup_dev_certs` に**チェックを入れて**実行してください。このワークフローが自動作成した開発用証明書だけを取り消してから作り直します（配布用の証明書や、TestFlight に配信済みのアプリには影響しません）。
+
 ## 7. build_only と testflight の違い
 
 | 選ぶもの | すること |
@@ -132,6 +134,14 @@ TestFlight のアプリは 90 日で期限が切れます。その前に「Run w
 - 6 桁コードを 5 回間違えるとコードが作り直されます。PC 画面の新しいコードを入れてください
 - 公衆 Wi-Fi・ゲスト Wi-Fi では端末どうしがつながらないことがあります（自宅の Wi-Fi で試してください）
 - VPN アプリを使っている場合は一度オフにしてください
+
+Run workflow が失敗した場合：
+
+- 実行をタップして、いちばん下の「結果の要約」と赤いエラーを確認します
+- 「maximum number of certificates」（証明書の上限）→ `cleanup_dev_certs` にチェックを入れて再実行
+- 「Secrets に…が登録されていません」→ Settings → Secrets and variables → Actions に 4 つの値を登録
+- 「契約」「agreement」→ App Store Connect の「ビジネス」（契約）で最新の規約に同意
+- 「No profiles」「App Group」→ Apple Developer の Identifiers で、2 つのアプリ ID に App Group `group.com.yosiken0421.padguide` が割り当てられているか確認
 
 盤面がうまく読めない場合：
 

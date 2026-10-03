@@ -21,6 +21,10 @@ on:
         description: "ビルド番号（数字）。空なら自動で増やす"
         required: false
         type: string
+      cleanup_dev_certs:
+        description: "証明書の上限エラーが出たときにチェック：このワークフローが自動作成した開発用証明書（Created via API）を取り消してから作る"
+        type: boolean
+        default: false
   workflow_call:
     inputs:
       release_mode:
@@ -32,6 +36,9 @@ on:
       build_number:
         type: string
         required: false
+      cleanup_dev_certs:
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -179,6 +186,13 @@ jobs:
           } >> "$GITHUB_ENV"
           echo "署名の準備ができました"
 
+      - name: 自動作成された開発用証明書の整理（チェックしたときだけ）
+        id: certcleanup
+        if: inputs.cleanup_dev_certs
+        env:
+          ASC_KEY_PATH: ${{ runner.temp }}/keys/AuthKey.p8
+        run: python3 .github/scripts/asc_cleanup_dev_certs.py
+
       - name: Release Archive
         id: archive
         run: |
@@ -290,6 +304,12 @@ jobs:
             fi
             if [ "$S_SIGN" = "failure" ]; then
               echo "署名の準備で止まりました。GitHub の Settings → Secrets and variables → Actions に ASC_KEY_ID / ASC_ISSUER_ID / ASC_KEY_P8 / APPLE_TEAM_ID が登録されているか確認してください。"
+            fi
+            if grep -q "maximum number of certificates" "$RUNNER_TEMP/archive.log" 2>/dev/null; then
+              echo ""
+              echo "**証明書の上限に達しています。** もう一度「Run workflow」を押し、**cleanup_dev_certs にチェック**を入れて実行してください。"
+              echo "（このワークフローが自動で作った開発用証明書「Created via API」だけを取り消してから作り直します。配布用の証明書には触りません）"
+              echo "手動で直す場合：Apple Developer → Certificates, Identifiers & Profiles → Certificates で「Apple Development: Created via API」を選び Revoke。"
             fi
             if [ "$S_ARCHIVE" = "failure" ] || [ "$S_UPLOAD" = "failure" ]; then
               echo "Apple 側の設定で止まった可能性があります。上の赤いエラーの内容を確認してください（契約への同意、Bundle Identifier、App Group、API キーの権限が Admin か など）。"
