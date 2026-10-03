@@ -99,7 +99,7 @@ class GuideService : Service() {
         )
         val n = Notification.Builder(this, CHANNEL)
             .setSmallIcon(android.R.drawable.ic_menu_compass)
-            .setContentTitle("パズドラ矢印ガイド 動作中")
+            .setContentTitle("パズルルート 動作中")
             .setContentText("画面を読み取って矢印を表示しています")
             .addAction(Notification.Action.Builder(null, "停止", stop).build())
             .setOngoing(true)

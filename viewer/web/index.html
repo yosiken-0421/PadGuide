@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>パズルルート PCビューアー</title>
+<link rel="stylesheet" href="style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%2326304A'/%3E%3Cpath d='M8 22 L16 10 L24 22' stroke='%23FF5D73' stroke-width='4' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
+</head>
+<body>
+<header class="topbar">
+  <h1 class="brand">パズルルート <span>PCビューアー</span></h1>
+  <div class="pills" role="status" aria-live="polite">
+    <span id="connPill" class="pill off"><i></i><b id="connText">iPhone 未接続</b></span>
+    <span id="sharePill" class="pill off"><i></i><b id="shareText">画面共有していません</b></span>
+  </div>
+  <button id="disconnectBtn" class="ghost" type="button" hidden>切断</button>
+</header>
+
+<section class="callstrip" id="callstrip" aria-live="polite">
+  <div class="call-start">
+    <canvas id="miniStart" width="84" height="70" aria-hidden="true"></canvas>
+    <div>
+      <div class="call-label">ここをつかむ</div>
+      <div class="call-pos" id="callPos">—</div>
+    </div>
+  </div>
+  <ol class="call-moves" id="callMoves" aria-label="最初の手順"></ol>
+  <div class="call-summary" id="callSummary">盤面を待っています</div>
+</section>
+
+<main class="layout">
+  <section class="stage">
+    <div class="board-wrap" id="boardWrap">
+      <canvas id="board" aria-label="盤面とルート"></canvas>
+      <div class="palette" id="palette" hidden role="dialog" aria-label="ドロップの色を選ぶ"></div>
+      <div class="notice" id="notice" hidden></div>
+    </div>
+
+    <div class="player" role="group" aria-label="ルートの再生">
+      <button type="button" id="resetBtn" title="最初に戻る" aria-label="最初に戻る">⏮</button>
+      <button type="button" id="backBtn" title="1手戻る" aria-label="1手戻る">◀</button>
+      <button type="button" id="playBtn" class="primary" aria-label="再生">▶ 再生</button>
+      <button type="button" id="fwdBtn" title="1手進む" aria-label="1手進む">▶︎|</button>
+      <span class="stepcount" id="stepCount">0 / 0 手</span>
+      <label>速さ
+        <select id="speed">
+          <option value="0.5">ゆっくり</option>
+          <option value="1" selected>ふつう</option>
+          <option value="2">はやい</option>
+        </select>
+      </label>
+      <label>矢印の太さ <input type="range" id="arrowWidth" min="4" max="18" value="9"></label>
+      <label>矢印の色
+        <select id="arrowColor">
+          <option value="spectrum" selected>手順で変わる色</option>
+          <option value="#FF5D73">コーラル</option>
+          <option value="#FFFFFF">白</option>
+          <option value="#00C2FF">水色</option>
+          <option value="#111827">黒</option>
+        </select>
+      </label>
+      <button type="button" id="fullBtn">全画面</button>
+      <button type="button" id="pipBtn">小窓で手前に表示</button>
+    </div>
+  </section>
+
+  <aside class="rail">
+    <section class="panel" id="connectPanel">
+      <h2>iPhone と接続</h2>
+      <ol class="howto">
+        <li>iPhone と この PC を同じ Wi-Fi につなぐ</li>
+        <li>iPhone の「パズルルート」で「QR コードで接続」を押す</li>
+        <li>下の QR コードを読み取る</li>
+      </ol>
+      <img id="qr" alt="接続用 QR コード" width="232" height="232">
+      <p class="code">接続コード <strong id="pairCode">------</strong></p>
+      <p class="muted">「同じ Wi-Fi の PC を探す」で接続する場合はこのコードを入力します。<span id="codeLeft"></span></p>
+      <p class="muted" id="lanInfo"></p>
+      <button type="button" id="rotateBtn" class="ghost">QR コードを作り直す</button>
+    </section>
+
+    <section class="panel stats" id="statsPanel">
+      <h2>見つかった候補</h2>
+      <dl>
+        <div><dt>予想コンボ数</dt><dd id="statCombo">—</dd></div>
+        <div><dt>移動数</dt><dd id="statSteps">—</dd></div>
+        <div><dt>解析時間</dt><dd id="statTime">—</dd></div>
+        <div><dt>認識信頼度</dt><dd id="statConf">—</dd></div>
+      </dl>
+      <p class="achieved" id="statAchieved"></p>
+      <p class="warn" id="warnUnknown" hidden></p>
+      <p class="muted" id="statSource"></p>
+    </section>
+
+    <section class="panel">
+      <h2>盤面修正と再探索</h2>
+      <p class="muted">盤面のマスをクリックすると色を直せます。直すと PC で自動的に探し直します。黄色い枠は認識に自信がないマスです。</p>
+      <div class="opts">
+        <label>最大移動数
+          <select id="optSteps"><option>20</option><option>32</option><option>48</option></select>
+        </label>
+        <label>探索時間
+          <select id="optTime"><option value="1000">約1秒</option><option value="3000">約3秒</option><option value="6000">約6秒</option></select>
+        </label>
+        <label>優先する色
+          <select id="optColor">
+            <option value="-1">指定なし</option>
+            <option value="0">火</option><option value="1">水</option><option value="2">木</option>
+            <option value="3">光</option><option value="4">闇</option><option value="5">回復</option>
+          </select>
+        </label>
+      </div>
+      <fieldset class="goals">
+        <legend>狙う条件</legend>
+        <label><input type="checkbox" id="gHeal"> 回復を消す</label>
+        <label><input type="checkbox" id="gFive"> 5色同時消し</label>
+        <label><input type="checkbox" id="gL"> L字</label>
+        <label><input type="checkbox" id="gCross"> 十字</label>
+        <label><input type="checkbox" id="gRow"> 横1列</label>
+        <label><input type="checkbox" id="gSquare"> 3×3正方形</label>
+      </fieldset>
+      <div class="row">
+        <button type="button" id="solveBtn" class="primary">再探索</button>
+        <button type="button" id="revertBtn" class="ghost" hidden>iPhone の結果に戻す</button>
+      </div>
+    </section>
+
+    <section class="panel muted-panel">
+      <h2>常に手前に表示するには</h2>
+      <p>Chrome / Edge では「小窓で手前に表示」を押すと、盤面だけの小さな窓がほかのウィンドウより手前に出ます。</p>
+      <p>Windows では PowerToys の「Always On Top」（Win + Ctrl + T）でもこのウィンドウを手前に固定できます。</p>
+    </section>
+  </aside>
+</main>
+
+<footer class="disclaimer">
+  画面共有はユーザーが開始した場合だけ動作します。画面は端末内または同一ネットワーク内で処理されます。本アプリは操作を自動実行しません。利用するサービスの規約を確認したうえで使用してください。
+</footer>
+
+<script src="solver.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

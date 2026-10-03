@@ -1,0 +1,54 @@
+name: PC ビューアー ビルド
+
+# PC ビューアー（Windows / macOS 用）をビルドして、Artifacts に保存します。
+on:
+  push:
+    paths: ["viewer/**", ".github/workflows/build-viewer.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  viewer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: テスト（接続トークン・不正接続の拒否・データ破棄・QR・自動検出）
+        working-directory: viewer
+        run: |
+          go vet ./...
+          go test -count=1 -v ./... | tee "$RUNNER_TEMP/go-test.log"
+      - name: テスト（PC 側の探索エンジン）
+        run: node --test viewer/web/solver.test.cjs
+      - name: Windows / macOS 用にビルド
+        working-directory: viewer
+        run: |
+          OUT="$RUNNER_TEMP/PuzzleRoute-Viewer"
+          mkdir -p "$OUT"
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o "$OUT/puzzleroute-viewer-windows.exe" .
+          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags "-s -w" -o "$OUT/puzzleroute-viewer-mac-arm64" .
+          CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o "$OUT/puzzleroute-viewer-mac-intel" .
+          cp launchers/* "$OUT/"
+          chmod +x "$OUT"/puzzleroute-viewer-mac-* "$OUT/起動_Mac.command"
+          cp ../README.md "$OUT/README.md"
+          cd "$RUNNER_TEMP" && zip -qry PuzzleRoute-Viewer.zip PuzzleRoute-Viewer
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PuzzleRoute-Viewer
+          path: ${{ runner.temp }}/PuzzleRoute-Viewer.zip
+      - name: 結果の要約
+        if: always()
+        run: |
+          {
+            echo "## PC ビューアー"
+            echo ""
+            echo "- Go テスト: $(grep -c -- '--- PASS' "$RUNNER_TEMP/go-test.log" 2>/dev/null || echo 0) 件成功"
+            echo "- 下の Artifacts の **PuzzleRoute-Viewer** をダウンロードして解凍し、Windows は「起動_Windows.bat」、Mac は「起動_Mac.command」を開いてください。"
+          } >> "$GITHUB_STEP_SUMMARY"

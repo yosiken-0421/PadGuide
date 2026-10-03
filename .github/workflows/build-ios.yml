@@ -1,0 +1,287 @@
+name: iOS ビルド / TestFlight
+
+# GitHub の「Actions」→「iOS ビルド / TestFlight」→「Run workflow」で実行します。
+#   build_only : ビルド・テスト・署名付き IPA の作成まで（アップロードしない）
+#   testflight : 上記に加えて App Store Connect（TestFlight）へアップロード
+on:
+  workflow_dispatch:
+    inputs:
+      release_mode:
+        description: "build_only = ビルドとテストだけ / testflight = TestFlight へアップロード"
+        type: choice
+        options:
+          - build_only
+          - testflight
+        default: build_only
+      version:
+        description: "表示バージョン（例 1.1）。空なら 1.0"
+        required: false
+        type: string
+      build_number:
+        description: "ビルド番号（数字）。空なら自動で増やす"
+        required: false
+        type: string
+  workflow_call:
+    inputs:
+      release_mode:
+        type: string
+        default: build_only
+      version:
+        type: string
+        required: false
+      build_number:
+        type: string
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-build-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  ios:
+    runs-on: macos-26
+    timeout-minutes: 75
+    env:
+      RELEASE_MODE: ${{ inputs.release_mode || 'build_only' }}
+      BUNDLE_PREFIX: ${{ vars.BUNDLE_PREFIX || 'com.yosiken0421.padguide' }}
+      DD: ${{ github.workspace }}/../dd
+    steps:
+      - name: Checkout
+        id: checkout
+        uses: actions/checkout@v4
+
+      - name: Xcode を選ぶ（Xcode 26 以降）
+        id: xcode
+        run: |
+          X=$(ls -d /Applications/Xcode_2[6-9]*.app 2>/dev/null | sort -V | tail -1)
+          if [ -z "$X" ]; then echo "::error::Xcode 26 以降が見つかりません"; exit 1; fi
+          sudo xcode-select -s "$X/Contents/Developer"
+          xcodebuild -version
+          echo "XCODE_VERSION=$(xcodebuild -version | head -1)" >> "$GITHUB_ENV"
+
+      - name: バージョンとビルド番号を決める
+        id: version
+        env:
+          IN_VERSION: ${{ inputs.version }}
+          IN_BUILD: ${{ inputs.build_number }}
+        run: |
+          VERSION="1.0"
+          if [ -n "$IN_VERSION" ]; then
+            if [[ "$IN_VERSION" =~ ^[0-9]+(\.[0-9]+){0,2}$ ]]; then VERSION="$IN_VERSION"; else echo "::error::version は 1.0 のような数字で入力してください"; exit 1; fi
+          fi
+          BUILD=$((GITHUB_RUN_NUMBER + 1000))
+          if [ -n "$IN_BUILD" ]; then
+            if [[ "$IN_BUILD" =~ ^[0-9]{1,9}$ ]]; then BUILD="$IN_BUILD"; else echo "::error::build_number は数字で入力してください"; exit 1; fi
+          fi
+          echo "APP_VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "APP_BUILD=$BUILD" >> "$GITHUB_ENV"
+          echo "バージョン $VERSION（ビルド $BUILD）"
+
+      - name: Xcode プロジェクトを生成
+        id: generate
+        working-directory: ios
+        run: |
+          brew install xcodegen
+          xcodegen generate
+
+      - name: Swift Package 解決
+        id: packages
+        run: .github/scripts/run-logged.sh packages xcodebuild -resolvePackageDependencies -project ios/PuzzleRoute.xcodeproj -scheme PuzzleRoute
+
+      - name: ビルド（Broadcast Upload Extension を含む）
+        id: build
+        run: |
+          .github/scripts/run-logged.sh build xcodebuild build -project ios/PuzzleRoute.xcodeproj -scheme PuzzleRoute \
+            -configuration Debug -destination 'generic/platform=iOS Simulator' -derivedDataPath "$DD" \
+            CODE_SIGNING_ALLOWED=NO PD_BUNDLE_PREFIX="$BUNDLE_PREFIX"
+          APPEX=$(find "$DD/Build/Products" -maxdepth 4 -path "*PuzzleRoute.app/PlugIns/Broadcast.appex" | head -1)
+          if [ -z "$APPEX" ]; then echo "::error::アプリに Broadcast Upload Extension が入っていません"; exit 1; fi
+          echo "拡張を確認: ${APPEX#$DD/}"
+
+      - name: ユニットテスト（認識・ルール・探索・接続・破棄）
+        id: unit
+        run: |
+          .github/scripts/run-logged.sh unit swift test --package-path ios/PuzzleCore
+          N=$(grep -Eo "Executed [0-9]+ tests?, with 0 failures" "$RUNNER_TEMP/unit.log" | tail -1 | grep -Eo "[0-9]+" | head -1)
+          echo "UNIT_COUNT=${N:-?}" >> "$GITHUB_ENV"
+          echo "::notice title=ユニットテスト::${N:-?} 件すべて成功"
+
+      - name: UI テスト（iPhone 12 mini 相当）
+        id: uitest
+        run: |
+          RUNTIME=$(xcrun simctl list runtimes -j | python3 -c "
+          import sys, json
+          rs = [r for r in json.load(sys.stdin)['runtimes'] if r.get('platform') == 'iOS' and r.get('isAvailable')]
+          rs.sort(key=lambda r: [int(x) for x in r['version'].split('.')])
+          print(rs[-1]['identifier'] if rs else '')")
+          NAME="iPhone 12 mini"
+          UDID=$(xcrun simctl create "PR iPhone 12 mini" com.apple.CoreSimulator.SimDeviceType.iPhone-12-mini "$RUNTIME" 2>/dev/null || true)
+          if [ -z "$UDID" ]; then
+            # iPhone 12 mini が使えない場合は、画面サイズが近い機種で代用
+            for T in iPhone-13-mini iPhone-SE-3rd-generation iPhone-16e iPhone-16; do
+              UDID=$(xcrun simctl create "PR $T" com.apple.CoreSimulator.SimDeviceType.$T "$RUNTIME" 2>/dev/null || true)
+              if [ -n "$UDID" ]; then NAME="$T（iPhone 12 mini の代わり）"; break; fi
+            done
+          fi
+          if [ -z "$UDID" ]; then echo "::error::テスト用シミュレーターを作れませんでした"; exit 1; fi
+          echo "UI_DEVICE=$NAME" >> "$GITHUB_ENV"
+          echo "シミュレーター: $NAME / $RUNTIME"
+          .github/scripts/run-logged.sh uitest xcodebuild test -project ios/PuzzleRoute.xcodeproj -scheme PuzzleRoute \
+            -destination "platform=iOS Simulator,id=$UDID" -derivedDataPath "$DD" \
+            CODE_SIGNING_ALLOWED=NO PD_BUNDLE_PREFIX="$BUNDLE_PREFIX"
+          N=$(grep -Eo "Executed [0-9]+ tests?, with 0 failures" "$RUNNER_TEMP/uitest.log" | tail -1 | grep -Eo "[0-9]+" | head -1)
+          echo "UI_COUNT=${N:-?}" >> "$GITHUB_ENV"
+          echo "::notice title=UI テスト::$NAME で ${N:-?} 件すべて成功"
+
+      - name: 署名の準備（App Store Connect API キー）
+        id: signing
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          missing=""
+          for v in ASC_KEY_ID ASC_ISSUER_ID ASC_KEY_P8 APPLE_TEAM_ID; do [ -z "${!v}" ] && missing="$missing $v"; done
+          if [ -n "$missing" ]; then
+            echo "::error::Repository secrets に次が登録されていません:$missing（Settings → Secrets and variables → Actions）"
+            exit 1
+          fi
+          mkdir -p "$RUNNER_TEMP/keys"
+          chmod 700 "$RUNNER_TEMP/keys"
+          # iPhone でコピーすると改行が消えることがあるので、鍵の形式を整え直して一時ファイルに保存（内容は表示しない）
+          python3 - <<'PY'
+          import os, re, base64, sys
+          raw = os.environ["ASC_KEY_P8"]
+          body = re.sub(r"-----(BEGIN|END)[^-]*-----", "", raw)
+          body = re.sub(r"[^A-Za-z0-9+/=]", "", body)
+          try:
+              der = base64.b64decode(body + "=" * (-len(body) % 4))
+          except Exception:
+              der = b""
+          if len(der) < 100:
+              print("::error::ASC_KEY_P8 の中身が正しくありません。.p8 ファイルの中身を全部貼り直してください")
+              sys.exit(1)
+          b64 = base64.b64encode(der).decode()
+          pem = "-----BEGIN PRIVATE KEY-----\n" + "\n".join(b64[i:i+64] for i in range(0, len(b64), 64)) + "\n-----END PRIVATE KEY-----\n"
+          path = os.path.join(os.environ["RUNNER_TEMP"], "keys", "AuthKey.p8")
+          with open(path, "w") as f:
+              f.write(pem)
+          os.chmod(path, 0o600)
+          PY
+          {
+            echo "KEY_ID=$(printf '%s' "$ASC_KEY_ID" | tr -d '[:space:]')"
+            echo "ISSUER_ID=$(printf '%s' "$ASC_ISSUER_ID" | tr -d '[:space:]')"
+            echo "TEAM_ID=$(printf '%s' "$APPLE_TEAM_ID" | tr -d '[:space:]')"
+          } >> "$GITHUB_ENV"
+          echo "署名の準備ができました"
+
+      - name: Release Archive
+        id: archive
+        run: |
+          .github/scripts/run-logged.sh archive xcodebuild archive -project ios/PuzzleRoute.xcodeproj -scheme PuzzleRoute \
+            -configuration Release -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/PuzzleRoute.xcarchive" -derivedDataPath "$DD-release" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$RUNNER_TEMP/keys/AuthKey.p8" \
+            -authenticationKeyID "$KEY_ID" -authenticationKeyIssuerID "$ISSUER_ID" \
+            DEVELOPMENT_TEAM="$TEAM_ID" CODE_SIGN_STYLE=Automatic \
+            PD_BUNDLE_PREFIX="$BUNDLE_PREFIX" \
+            MARKETING_VERSION="$APP_VERSION" CURRENT_PROJECT_VERSION="$APP_BUILD"
+
+      - name: IPA 書き出し
+        id: export
+        run: |
+          cat > "$RUNNER_TEMP/export.plist" <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>destination</key><string>export</string>
+            <key>teamID</key><string>$TEAM_ID</string>
+            <key>signingStyle</key><string>automatic</string>
+            <key>manageAppVersionAndBuildNumber</key><false/>
+          </dict></plist>
+          EOF
+          .github/scripts/run-logged.sh export xcodebuild -exportArchive -archivePath "$RUNNER_TEMP/PuzzleRoute.xcarchive" \
+            -exportOptionsPlist "$RUNNER_TEMP/export.plist" -exportPath "$RUNNER_TEMP/ipa" -allowProvisioningUpdates \
+            -authenticationKeyPath "$RUNNER_TEMP/keys/AuthKey.p8" -authenticationKeyID "$KEY_ID" -authenticationKeyIssuerID "$ISSUER_ID"
+          ls -la "$RUNNER_TEMP/ipa"
+          IPA=$(ls "$RUNNER_TEMP"/ipa/*.ipa | head -1)
+          mkdir -p "$RUNNER_TEMP/out"
+          cp "$IPA" "$RUNNER_TEMP/out/PuzzleRoute-$APP_VERSION-$APP_BUILD.ipa"
+
+      - name: Artifact 保存
+        id: artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PuzzleRoute-iOS-${{ env.APP_VERSION }}-${{ env.APP_BUILD }}
+          path: ${{ runner.temp }}/out/*.ipa
+          retention-days: 14
+
+      - name: App Store Connect（TestFlight）へアップロード
+        id: upload
+        if: env.RELEASE_MODE == 'testflight'
+        run: |
+          cat > "$RUNNER_TEMP/upload.plist" <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>destination</key><string>upload</string>
+            <key>teamID</key><string>$TEAM_ID</string>
+            <key>signingStyle</key><string>automatic</string>
+            <key>manageAppVersionAndBuildNumber</key><false/>
+          </dict></plist>
+          EOF
+          .github/scripts/run-logged.sh upload xcodebuild -exportArchive -archivePath "$RUNNER_TEMP/PuzzleRoute.xcarchive" \
+            -exportOptionsPlist "$RUNNER_TEMP/upload.plist" -exportPath "$RUNNER_TEMP/upload" -allowProvisioningUpdates \
+            -authenticationKeyPath "$RUNNER_TEMP/keys/AuthKey.p8" -authenticationKeyID "$KEY_ID" -authenticationKeyIssuerID "$ISSUER_ID"
+
+      - name: 一時ファイルの削除
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/keys" "$RUNNER_TEMP/export.plist" "$RUNNER_TEMP/upload.plist"
+
+      - name: 結果の要約
+        if: always()
+        env:
+          S_BUILD: ${{ steps.build.outcome }}
+          S_UNIT: ${{ steps.unit.outcome }}
+          S_UI: ${{ steps.uitest.outcome }}
+          S_SIGN: ${{ steps.signing.outcome }}
+          S_ARCHIVE: ${{ steps.archive.outcome }}
+          S_EXPORT: ${{ steps.export.outcome }}
+          S_UPLOAD: ${{ steps.upload.outcome }}
+        run: |
+          m() { case "$1" in success) echo "✅ 成功";; failure) echo "❌ 失敗";; skipped|"") echo "⏭ 実行せず";; cancelled) echo "⛔ 中止";; *) echo "$1";; esac; }
+          {
+            echo "## iOS ビルド結果"
+            echo ""
+            echo "| 項目 | 結果 |"
+            echo "|---|---|"
+            echo "| モード | ${RELEASE_MODE} |"
+            echo "| バージョン | ${APP_VERSION:-?}（ビルド ${APP_BUILD:-?}） |"
+            echo "| Xcode | ${XCODE_VERSION:-?} |"
+            echo "| ビルド（拡張を含む） | $(m "$S_BUILD") |"
+            echo "| ユニットテスト | $(m "$S_UNIT")（${UNIT_COUNT:-?} 件） |"
+            echo "| UI テスト（${UI_DEVICE:-?}） | $(m "$S_UI")（${UI_COUNT:-?} 件） |"
+            echo "| 署名の準備 | $(m "$S_SIGN") |"
+            echo "| Release Archive | $(m "$S_ARCHIVE") |"
+            echo "| IPA 書き出し・保存 | $(m "$S_EXPORT") |"
+            echo "| TestFlight へアップロード | $(m "$S_UPLOAD") |"
+            echo ""
+            if [ "$S_UPLOAD" = "success" ]; then
+              echo "アップロードしました。App Store Connect での処理に 10〜30 分ほどかかります。終わると iPhone の TestFlight アプリに表示されます。"
+            elif [ "$RELEASE_MODE" = "build_only" ] && [ "$S_EXPORT" = "success" ]; then
+              echo "build_only のため、アップロードはしていません。IPA はこの画面下の Artifacts に保存されています。"
+            fi
+            if [ "$S_SIGN" = "failure" ]; then
+              echo "署名の準備で止まりました。GitHub の Settings → Secrets and variables → Actions に ASC_KEY_ID / ASC_ISSUER_ID / ASC_KEY_P8 / APPLE_TEAM_ID が登録されているか確認してください。"
+            fi
+            if [ "$S_ARCHIVE" = "failure" ] || [ "$S_UPLOAD" = "failure" ]; then
+              echo "Apple 側の設定で止まった可能性があります。上の赤いエラーの内容を確認してください（契約への同意、Bundle Identifier、App Group、API キーの権限が Admin か など）。"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

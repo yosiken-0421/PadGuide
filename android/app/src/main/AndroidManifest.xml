@@ -15,7 +15,7 @@
     <application
         android:allowBackup="false"
         android:icon="@android:drawable/ic_menu_compass"
-        android:label="パズドラ矢印ガイド"
+        android:label="パズルルート"
         android:theme="@android:style/Theme.DeviceDefault">
 
         <activity
