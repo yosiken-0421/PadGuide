@@ -132,8 +132,11 @@ final class PuzzleRouteUITests: XCTestCase {
         let delta = pipColors.map { ($0.0, (after[$0.0] ?? 0) - (before[$0.0] ?? 0)) }
         print("PIPCHECK: " + delta.map { "\($0.0)+\($0.1)" }.joined(separator: " ")
               + " (before " + pipColors.map { "\($0.0)=\(before[$0.0] ?? 0)" }.joined(separator: " ") + ")")
+        let summary = "PIPCHECK: " + delta.map { "\($0.0)+\($0.1)" }.joined(separator: " ")
+            + " (before " + pipColors.map { "\($0.0)=\(before[$0.0] ?? 0)" }.joined(separator: " ")
+            + " after " + pipColors.map { "\($0.0)=\(after[$0.0] ?? 0)" }.joined(separator: " ") + ")"
         for (name, d) in delta {
-            XCTAssertGreaterThan(d, 150, "小窓に「\(name)」の色が表示されていない（増えた画素 \(d)）")
+            XCTAssertGreaterThan(d, 150, "小窓に「\(name)」の色が表示されていない（増えた画素 \(d)） \(summary)")
         }
 
         // アプリに戻って小窓を閉じられる

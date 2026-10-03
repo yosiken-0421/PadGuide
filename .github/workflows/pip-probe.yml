@@ -2,6 +2,8 @@ name: PiP probe (一時)
 on:
   push:
     branches: ["wip/pip2"]
+permissions:
+  contents: write
 jobs:
   probe:
     runs-on: macos-26
@@ -11,7 +13,6 @@ jobs:
         run: |
           X=$(ls -d /Applications/Xcode_2[6-9]*.app | sort -V | tail -1); sudo xcode-select -s "$X/Contents/Developer"
           brew install xcodegen >/dev/null && (cd ios && xcodegen generate >/dev/null)
-          xcrun simctl list devicetypes | grep -E "iPhone|iPad" | sed 's/^/TYPE /' | head -60
       - name: build for testing
         run: |
           .github/scripts/run-logged.sh bft xcodebuild build-for-testing -project ios/PuzzleRoute.xcodeproj -scheme PuzzleRoute \
@@ -23,15 +24,26 @@ jobs:
           import sys, json
           rs=[r for r in json.load(sys.stdin)['runtimes'] if r.get('platform')=='iOS' and r.get('isAvailable')]
           rs.sort(key=lambda r:[int(x) for x in r['version'].split('.')]); print(rs[-1]['identifier'])")
-          echo "::notice title=runtime::$RUNTIME"
-          for T in iPhone-17-Pro iPhone-16 iPhone-12-mini iPad-Pro-11-inch-M4-8GB iPad-Air-11-inch-M3; do
+          mkdir -p "$RUNNER_TEMP/out"
+          for T in iPad-Pro-11-inch-M4-8GB iPad-Air-11-inch-M3; do
             UDID=$(xcrun simctl create "P $T" com.apple.CoreSimulator.SimDeviceType.$T "$RUNTIME" 2>/dev/null || true)
-            if [ -z "$UDID" ]; then echo "::notice title=$T::作成できない"; continue; fi
+            [ -z "$UDID" ] && continue
             xcodebuild test-without-building -project ios/PuzzleRoute.xcodeproj -scheme PuzzleRoute \
               -destination "platform=iOS Simulator,id=$UDID" -derivedDataPath "$RUNNER_TEMP/dd" \
+              -resultBundlePath "$RUNNER_TEMP/$T.xcresult" \
               -only-testing:PuzzleRouteUITests/PuzzleRouteUITests/testPictureInPictureStartsAndShowsRoute > "$RUNNER_TEMP/$T.log" 2>&1
-            R=$?
-            MSG=$(grep -oE "(小窓[^\"]{0,220}|PIPCHECK: .*|Executed [0-9]+ test.*)" "$RUNNER_TEMP/$T.log" | sort -u | head -4 | tr '\n' ' | ')
-            echo "::notice title=$T (exit $R)::${MSG:0:900}"
-            xcrun simctl delete "$UDID" || true
+            echo "exit $?" > "$RUNNER_TEMP/out/$T-result.txt"
+            grep -E "PIPCHECK|error:|小窓|Executed" "$RUNNER_TEMP/$T.log" | sort -u | head -20 >> "$RUNNER_TEMP/out/$T-result.txt"
+            mkdir -p "$RUNNER_TEMP/out/$T"
+            xcrun xcresulttool export attachments --path "$RUNNER_TEMP/$T.xcresult" --output-path "$RUNNER_TEMP/out/$T" >/dev/null 2>&1
+            ls -la "$RUNNER_TEMP/out/$T" >> "$RUNNER_TEMP/out/$T-result.txt"
+            xcrun simctl delete "$UDID"
           done
+          # 画像を小さくして一時ブランチへ（確認用。秘密情報は含まない）
+          for f in "$RUNNER_TEMP"/out/*/*.png "$RUNNER_TEMP"/out/*/*.jpeg "$RUNNER_TEMP"/out/*/*.jpg; do
+            [ -f "$f" ] && sips -Z 900 "$f" >/dev/null 2>&1
+          done
+          cd "$RUNNER_TEMP/out"
+          git init -q && git checkout -q -b wip/probe-out
+          git -c user.name=probe -c user.email=probe@invalid add -A && git -c user.name=probe -c user.email=probe@invalid commit -q -m "probe output"
+          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}" wip/probe-out
