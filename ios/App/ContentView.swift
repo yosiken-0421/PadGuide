@@ -145,8 +145,12 @@ struct ContentView: View {
                 }
                 HStack {
                     Button("再探索") { model.resolve() }
+                        .buttonStyle(.borderless)
                     Spacer()
-                    if model.edited { Button("自動の結果に戻す") { model.revertToAuto() } }
+                    if model.edited {
+                        Button("自動の結果に戻す") { model.revertToAuto() }
+                            .buttonStyle(.borderless)
+                    }
                 }
             } else {
                 Text("まだ盤面がありません。画面共有を開始して、パズル画面を表示してください。")
