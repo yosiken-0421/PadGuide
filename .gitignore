@@ -1,0 +1,9 @@
+.gradle/
+build/
+local.properties
+.idea/
+*.iml
+ios/PadGuide.xcodeproj/
+ios/build/
+ios/Payload/
+*.ipa
