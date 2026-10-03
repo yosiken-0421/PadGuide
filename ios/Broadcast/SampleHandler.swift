@@ -21,6 +21,7 @@ final class SampleHandler: RPBroadcastSampleHandler {
     private var classifier = ColorClassifier()
     private var rect: BoardRect?
     private var badFrames = 0
+    private var lastGoodFrame = 0.0
     private var hasResult = false
     private var seq = 0
     private var cancelFlag: CancellationFlag?
@@ -61,6 +62,7 @@ final class SampleHandler: RPBroadcastSampleHandler {
         if t - lastFrame < 0.25 { return }          // 1 秒に約 4 回だけ解析
         lastFrame = t
         if t - lastReload > 2 { reloadSettings() }
+        if SharedStore.takeForceSolve() { session.forceNextSolve() }   // アプリで「今の画面で計算し直す」
 
         guard let pb = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
         CVPixelBufferLockBaseAddress(pb, .readOnly)
@@ -87,6 +89,7 @@ final class SampleHandler: RPBroadcastSampleHandler {
             return
         }
         badFrames = 0
+        lastGoodFrame = t
 
         // 同じ盤面が続いて確定し、前回と違うときだけ再計算
         guard session.feed(reading) else {
@@ -118,7 +121,8 @@ final class SampleHandler: RPBroadcastSampleHandler {
     /// 結果がまだないときだけ、状態（読めない・暗い・変化中）を 1 秒に 1 回まで知らせる
     private func reportStatus(_ status: String, _ t: Double) {
         if hasResult && status == "unstable" { return }
-        if hasResult && t - lastStatusSent < 3 { return }   // ルート表示中は少し待ってから
+        // ルート表示中は、操作中に指で隠れたりコンボ演出で読めなくなったりするので、すぐには消さない
+        if hasResult && t - lastGoodFrame < 10 { return }
         guard t - lastStatusSent > 1 else { return }
         lastStatusSent = t
         if hasResult { hasResult = false }

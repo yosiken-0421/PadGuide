@@ -89,6 +89,16 @@ enum SharedStore {
         }
     }
 
+    // MARK: 「今の画面で計算し直す」の依頼（アプリ → 画面共有拡張）
+    private static let forceSolveKey = "forceSolve"
+    static func requestForceSolve() { AppGroup.defaults.set(true, forKey: forceSolveKey) }
+    /// 依頼があれば true を返して取り消す
+    static func takeForceSolve() -> Bool {
+        guard AppGroup.defaults.bool(forKey: forceSolveKey) else { return false }
+        AppGroup.defaults.removeObject(forKey: forceSolveKey)
+        return true
+    }
+
     // MARK: 画面共有中の目印
     static func heartbeat() { AppGroup.defaults.set(Date().timeIntervalSince1970, forKey: heartbeatKey) }
     static func clearHeartbeat() { AppGroup.defaults.removeObject(forKey: heartbeatKey) }

@@ -122,6 +122,13 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// 画面共有中：表示中のルートを手放し、今の画面の盤面で計算し直す
+    func recalcFromScreen() {
+        edited = false
+        SharedStore.requestForceSolve()
+        connectionMessage = nil
+    }
+
     func revertToAuto() {
         edited = false
         if let l = latest { apply(l) } else { board = nil; result = nil }

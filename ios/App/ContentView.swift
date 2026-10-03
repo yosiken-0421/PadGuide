@@ -151,10 +151,15 @@ struct ContentView: View {
                     .foregroundStyle(.secondary)
                     .accessibilityIdentifier("emptyBoard")
             }
+            if model.sharing {
+                Button("今の画面で計算し直す") { model.recalcFromScreen() }
+                    .buttonStyle(.borderless)
+                    .accessibilityIdentifier("recalcButton")
+            }
         } header: {
             Text("認識した盤面")
         } footer: {
-            Text("黄色い枠は認識に自信がないマスです。タップすると正しい色に直せます。直した色の傾向はこの iPhone の中だけに保存されます。")
+            Text("ルートを表示した後は、ドロップを動かしている間もルートを変えずに表示し続けます。コンボで消えて次の盤面になると、自動で計算し直します。黄色い枠は認識に自信がないマスです。タップすると正しい色に直せます。直した色の傾向はこの iPhone の中だけに保存されます。")
         }
     }
 

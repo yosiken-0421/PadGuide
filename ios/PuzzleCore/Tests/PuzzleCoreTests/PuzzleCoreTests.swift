@@ -356,6 +356,67 @@ final class ProtocolTests: XCTestCase {
         XCTAssertNil(MiniHTTP.parseResponse(Data("garbage".utf8)))
     }
 
+    private func reading(_ b: Board) -> BoardReading {
+        BoardReading(rect: BoardRect(x: 0, y: 0, cell: 100, size: b.size),
+                     cells: b.cells.map { CellReading(kind: $0, confidence: 0.9, color: RGB(0, 0, 0)) },
+                     brightness: 0.6)
+    }
+
+    /// ルート表示後にドロップを動かしても（＝入れ替えただけ）、途中で別のルートに変わらない
+    func testRouteStaysFixedWhileMovingOrbs() {
+        let s = LiveSession()
+        s.begin()
+        let start = SyntheticScreen.randomBoard(S65, seed: 41)
+        XCTAssertFalse(s.feed(reading(start)))
+        XCTAssertTrue(s.feed(reading(start)), "最初の盤面でルートを計算する")
+
+        // 操作の途中で指を止めた盤面（いくつかのドロップが入れ替わっている）
+        let moving = BoardOps.apply(start: 0, moves: [.right, .right, .down, .down, .left, .down], to: start)!
+        XCTAssertNotEqual(moving.cells, start.cells)
+        XCTAssertFalse(s.feed(reading(moving)))
+        XCTAssertFalse(s.feed(reading(moving)), "操作中は再計算しない")
+        XCTAssertFalse(s.feed(reading(moving)))
+
+        // 持っているドロップが一部読み違えられても同じターン扱い
+        var held = moving
+        held.cells[14] = .unknown
+        XCTAssertFalse(s.feed(reading(held)))
+        XCTAssertFalse(s.feed(reading(held)), "読み違い2個までは操作中のまま")
+
+        // 指で隠れて読めなくなっても、表示中のルートは手放さない
+        s.invalidate()
+        XCTAssertFalse(s.feed(reading(moving)))
+        XCTAssertFalse(s.feed(reading(moving)))
+
+        // コンボで消えて新しいドロップが落ちてきた盤面（各色の個数が変わる）→ 次のターンとして再計算
+        let next = SyntheticScreen.randomBoard(S65, seed: 77)
+        XCTAssertFalse(LiveSession.isSameTurn(start.cells, next.cells))
+        XCTAssertFalse(s.feed(reading(next)))
+        XCTAssertTrue(s.feed(reading(next)), "次の盤面では再計算する")
+    }
+
+    func testForceNextSolve() {
+        let s = LiveSession()
+        s.begin()
+        let b = SyntheticScreen.randomBoard(S65, seed: 42)
+        XCTAssertFalse(s.feed(reading(b)))
+        XCTAssertTrue(s.feed(reading(b)))
+        XCTAssertFalse(s.feed(reading(b)), "同じ盤面では再計算しない")
+        s.forceNextSolve()
+        XCTAssertFalse(s.feed(reading(b)))
+        XCTAssertTrue(s.feed(reading(b)), "再探索を指示したら同じ盤面でも再計算する")
+    }
+
+    func testIsSameTurn() {
+        let a = Board(size: S65, string: String(repeating: "RBGLDH", count: 5)).cells
+        var swapped = a; swapped.swapAt(0, 1); swapped.swapAt(5, 11)
+        XCTAssertTrue(LiveSession.isSameTurn(a, swapped))
+        var three = a; three[0] = .water; three[1] = .water; three[2] = .water   // 火・水・木→水水水（2個変化）
+        XCTAssertTrue(LiveSession.isSameTurn(a, three))
+        three[3] = .water; three[4] = .water                                    // さらに変化
+        XCTAssertFalse(LiveSession.isSameTurn(a, three))
+    }
+
     func testLiveSessionDiscardsOnShareEnd() {
         let s = LiveSession()
         s.begin()
