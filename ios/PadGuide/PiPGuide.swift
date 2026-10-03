@@ -93,7 +93,11 @@ final class PiPGuide: NSObject, ObservableObject, AVPictureInPictureControllerDe
             let pts: [CGPoint] = res.path.enumerated().map { (k, idx) in
                 let n = visits[idx, default: 0]; visits[idx] = n + 1
                 let off = k == 0 ? 0 : CGFloat(n) * cell * 0.09
-                return CGPoint(x: (CGFloat(idx % 6) + 0.5) * cell + off, y: header + (CGFloat(idx / 6) + 0.5) * cell + off)
+                let col: CGFloat = CGFloat(idx % 6) + 0.5
+                let row: CGFloat = CGFloat(idx / 6) + 0.5
+                let px: CGFloat = col * cell + off
+                let py: CGFloat = header + row * cell + off
+                return CGPoint(x: px, y: py)
             }
             g.setLineCap(.round); g.setLineJoin(.round)
             for (color, width) in [(UIColor.black, cell * 0.17), (UIColor.white, cell * 0.10)] {
@@ -125,16 +129,27 @@ final class PiPGuide: NSObject, ObservableObject, AVPictureInPictureControllerDe
     }
 
     private func pointAt(_ p: [CGPoint], _ t: Double) -> CGPoint {
-        let lens = (0..<(p.count - 1)).map { hypot(p[$0 + 1].x - p[$0].x, p[$0 + 1].y - p[$0].y) }
-        var target = lens.reduce(0, +) * CGFloat(t)
+        var lens: [CGFloat] = []
+        var total: CGFloat = 0
+        for i in 0..<(p.count - 1) {
+            let dx: CGFloat = p[i + 1].x - p[i].x
+            let dy: CGFloat = p[i + 1].y - p[i].y
+            let len: CGFloat = (dx * dx + dy * dy).squareRoot()
+            lens.append(len)
+            total += len
+        }
+        var target: CGFloat = total * CGFloat(t)
         for i in lens.indices {
             if target <= lens[i] || i == lens.count - 1 {
-                let k = lens[i] == 0 ? 0 : min(1, max(0, target / lens[i]))
-                return CGPoint(x: p[i].x + (p[i + 1].x - p[i].x) * k, y: p[i].y + (p[i + 1].y - p[i].y) * k)
+                var k: CGFloat = 0
+                if lens[i] > 0 { k = min(1, max(0, target / lens[i])) }
+                let x: CGFloat = p[i].x + (p[i + 1].x - p[i].x) * k
+                let y: CGFloat = p[i].y + (p[i + 1].y - p[i].y) * k
+                return CGPoint(x: x, y: y)
             }
             target -= lens[i]
         }
-        return p.last!
+        return p[p.count - 1]
     }
 
     // MARK: CGImage → CMSampleBuffer → 表示レイヤー
