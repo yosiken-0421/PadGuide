@@ -40,6 +40,8 @@ targets:
       path: App/Info.plist
       properties:
         CFBundleDisplayName: パズルルート
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         UILaunchScreen: {}
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
         UIBackgroundModes: [audio]
@@ -70,6 +72,8 @@ targets:
       path: Broadcast/Info.plist
       properties:
         CFBundleDisplayName: パズルルート
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         PDAppGroup: $(PD_APP_GROUP)
         NSLocalNetworkUsageDescription: 同じ Wi-Fi 内の PC ビューアーへ、盤面の認識結果とルートを送るためにローカルネットワークを使います。画面の画像は送りません。
         NSBonjourServices: [_puzzleroute._tcp]
