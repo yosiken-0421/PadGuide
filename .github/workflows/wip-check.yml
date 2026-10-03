@@ -1,0 +1,10 @@
+name: WIP check (一時)
+on:
+  push:
+    branches: ["wip/**"]
+jobs:
+  ios:
+    uses: ./.github/workflows/build-ios.yml
+    with:
+      release_mode: build_only
+    secrets: inherit
