@@ -44,16 +44,22 @@ struct BoardView: View {
                 Canvas { ctx, _ in
                     draw(ctx, cell: cell)
                 }
-                // タップ用の透明ボタン（読み上げにも対応）
-                ForEach(0..<board.size.count, id: \.self) { i in
-                    let r = i / cols, c = i % cols
-                    Button { onTapCell?(i) } label: { Color.clear }
-                        .frame(width: cell, height: cell)
-                        .contentShape(Rectangle())
-                        .offset(x: CGFloat(c) * cell, y: CGFloat(r) * cell)
-                        .accessibilityIdentifier("cell-\(i)")
-                        .accessibilityLabel("上から\(r + 1)段目、左から\(c + 1)列目、\(board.cells[i].label)")
-                        .accessibilityHint("タップして色を直す")
+                // タップ用の透明ボタン（読み上げにも対応）。行と列で並べ、見た目とタップ位置を一致させる
+                VStack(spacing: 0) {
+                    ForEach(0..<rows, id: \.self) { r in
+                        HStack(spacing: 0) {
+                            ForEach(0..<cols, id: \.self) { c in
+                                let i = r * cols + c
+                                Button { onTapCell?(i) } label: {
+                                    Color.clear.frame(width: cell, height: cell).contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityIdentifier("cell-\(i)")
+                                .accessibilityLabel("上から\(r + 1)段目、左から\(c + 1)列目、\(board.cells[i].label)")
+                                .accessibilityHint("タップして色を直す")
+                            }
+                        }
+                    }
                 }
             }
             .frame(width: cell * CGFloat(cols), height: cell * CGFloat(rows))
