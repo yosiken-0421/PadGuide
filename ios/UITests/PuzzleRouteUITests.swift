@@ -47,20 +47,128 @@ final class PuzzleRouteUITests: XCTestCase {
         XCTAssertTrue(notice.label.contains("本アプリは操作を自動実行しません"))
     }
 
-    /// 小窓（ピクチャ・イン・ピクチャ）表示は提供しない。押しても何も起きないボタンを残さず、代わりの見かたを説明する
-    func testNoPictureInPictureButtonAndExplainsAlternatives() {
+    // MARK: 小窓（ピクチャ・イン・ピクチャ）
+
+    /// スクリーンショットの中で、指定した色に近い画素の数を数える
+    private func countColors(_ shot: XCUIScreenshot, _ targets: [(String, (Int, Int, Int))], tol: Int = 28) -> [String: Int] {
+        guard let cg = shot.image.cgImage else { return [:] }
+        let w = cg.width, h = cg.height
+        var px = [UInt8](repeating: 0, count: w * h * 4)
+        let ctx = CGContext(data: &px, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
+                            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        ctx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
+        var out: [String: Int] = [:]
+        for (name, _) in targets { out[name] = 0 }
+        var i = 0
+        while i < px.count {
+            let r = Int(px[i]), g = Int(px[i + 1]), b = Int(px[i + 2])
+            for (name, c) in targets where abs(r - c.0) <= tol && abs(g - c.1) <= tol && abs(b - c.2) <= tol {
+                out[name, default: 0] += 1
+            }
+            i += 4 * 2   // 1画素おき（十分な精度）
+        }
+        return out
+    }
+
+    /// 小窓の色（アプリ内の独自配色）
+    private let pipColors: [(String, (Int, Int, Int))] = [
+        ("火", (232, 71, 61)), ("水", (46, 140, 235)), ("木", (46, 184, 102)), ("背景", (38, 48, 74)),
+    ]
+
+    private func diagnostics(_ app: XCUIApplication) -> String {
+        if !app.staticTexts["pipSupported"].exists { app.buttons["pipInfoButton"].tap() }
+        return ["pipSupported", "pipPossible", "pipActive", "pipLastError", "pipReason", "pipStatus"]
+            .map { app.staticTexts[$0] }.filter { $0.exists }.map { $0.label }.joined(separator: " / ")
+    }
+
+    /// 小窓を開始すると、ホーム画面に戻っても盤面とルートの図が表示されている
+    func testPictureInPictureStartsAndShowsRoute() {
         let app = XCUIApplication()
         app.launchArguments = ["-uitest", "-demoBoard"]
         app.launch()
         XCTAssertTrue(app.navigationBars["パズルルート"].waitForExistence(timeout: 10))
 
-        let notice = app.staticTexts["overlayNotice"]
-        XCTAssertTrue(reveal(notice, in: app), "ルートの見かたの説明が表示される")
-        XCTAssertTrue(notice.label.contains("重ねて表示することはできません"))
-        XCTAssertTrue(notice.label.contains("PC ビューアー"))
+        // 比較用：小窓がない状態のホーム画面
+        XCUIDevice.shared.press(.home)
+        sleep(2)
+        let before = countColors(XCUIScreen.main.screenshot(), pipColors)
+        app.activate()
+        XCTAssertTrue(app.navigationBars["パズルルート"].waitForExistence(timeout: 10))
+        sleep(3)   // 見本盤面のルート計算を待つ
 
-        let pipButtons = app.buttons.matching(NSPredicate(format: "label CONTAINS '小窓' OR label CONTAINS 'ピクチャ・イン・ピクチャ'"))
-        XCTAssertEqual(pipButtons.count, 0, "小窓表示のボタンは存在しない")
+        let button = app.buttons["pipButton"]
+        XCTAssertTrue(button.waitForExistence(timeout: 10), "小窓ボタンがある")
+        let enabled = expectation(for: NSPredicate(format: "isEnabled == true"), evaluatedWith: button)
+        if XCTWaiter.wait(for: [enabled], timeout: 20) != .completed {
+            XCTFail("小窓ボタンが有効にならない：\(diagnostics(app))")
+            return
+        }
+
+        // 連打しても二重に開始しない（2回目は開始中のため無視される）
+        button.tap()
+        if button.isEnabled { button.tap() }
+
+        let status = app.staticTexts["pipStatus"]
+        var started = false
+        for _ in 0..<15 {
+            if status.exists && status.label.contains("表示中") { started = true; break }
+            sleep(1)
+        }
+        if !started {
+            XCTFail("小窓が開始されない：\(diagnostics(app))")
+            return
+        }
+        XCTAssertTrue(diagnostics(app).contains("PiP実行中：はい"))
+
+        // ホーム画面に戻っても小窓に盤面とルートが表示されている
+        XCUIDevice.shared.press(.home)
+        sleep(3)
+        let shot = XCUIScreen.main.screenshot()
+        let att = XCTAttachment(screenshot: shot)
+        att.name = "小窓（ホーム画面）"
+        att.lifetime = .keepAlways
+        add(att)
+        let after = countColors(shot, pipColors)
+        let delta = pipColors.map { ($0.0, (after[$0.0] ?? 0) - (before[$0.0] ?? 0)) }
+        print("PIPCHECK: " + delta.map { "\($0.0)+\($0.1)" }.joined(separator: " ")
+              + " (before " + pipColors.map { "\($0.0)=\(before[$0.0] ?? 0)" }.joined(separator: " ") + ")")
+        for (name, d) in delta {
+            XCTAssertGreaterThan(d, 150, "小窓に「\(name)」の色が表示されていない（増えた画素 \(d)）")
+        }
+
+        // アプリに戻って小窓を閉じられる
+        app.activate()
+        XCTAssertTrue(button.waitForExistence(timeout: 10))
+        for _ in 0..<5 where !(status.exists && status.label.contains("表示中")) { sleep(1) }
+        if button.label.contains("閉じる") {
+            button.tap()
+            for _ in 0..<10 where status.label.contains("表示中") { sleep(1) }
+            XCTAssertFalse(status.label.contains("表示中"), "小窓を閉じられる")
+        }
+    }
+
+    /// 診断表示（対応・開始可能・実行中・エラー）が出る
+    func testPictureInPictureDiagnosticsShown() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-uitest"]
+        app.launch()
+        XCTAssertTrue(app.navigationBars["パズルルート"].waitForExistence(timeout: 10))
+        let info = app.buttons["pipInfoButton"]
+        XCTAssertTrue(info.waitForExistence(timeout: 10))
+        info.tap()
+        XCTAssertTrue(app.staticTexts["pipSupported"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["pipPossible"].exists)
+        XCTAssertTrue(app.staticTexts["pipActive"].label.contains("いいえ"))
+        XCTAssertTrue(app.staticTexts["pipLastError"].exists)
+        // 開始できない場合はボタンが無効で、理由が表示される
+        let button = app.buttons["pipButton"]
+        if !app.staticTexts["pipSupported"].label.contains("はい") {
+            XCTAssertFalse(button.isEnabled, "非対応ならボタンは無効")
+            XCTAssertTrue(app.staticTexts["pipReason"].exists, "開始できない理由が出る")
+        }
+        let notice = app.staticTexts["pipNotice"]
+        XCTAssertTrue(reveal(notice, in: app))
+        XCTAssertTrue(notice.label.contains("小窓"))
     }
 
     func testManualCorrectionAndResearch() {

@@ -142,6 +142,7 @@ jobs:
           N=$(grep -Eo "Executed [0-9]+ tests?, with 0 failures" "$RUNNER_TEMP/uitest.log" | tail -1 | grep -Eo "[0-9]+" | head -1)
           echo "UI_COUNT=${N:-?}" >> "$GITHUB_ENV"
           echo "::notice title=UI テスト::$NAME で ${N:-?} 件すべて成功"
+          grep -o "PIPCHECK: .*" "$RUNNER_TEMP/uitest.log" | head -1 | while IFS= read -r l; do echo "::notice title=小窓の表示確認::${l#PIPCHECK: }"; done
 
       - name: 署名の準備（App Store Connect API キー）
         id: signing
@@ -207,9 +208,10 @@ jobs:
             MARKETING_VERSION="$APP_VERSION" CURRENT_PROJECT_VERSION="$APP_BUILD"
           # バージョンとビルド番号が正しく入ったか確認（アプリと拡張は同じである必要がある）
           APP="$RUNNER_TEMP/PuzzleRoute.xcarchive/Products/Applications/PuzzleRoute.app"
-          # 使わないバックグラウンド動作（音声など）を宣言していないこと
-          if /usr/libexec/PlistBuddy -c "Print UIBackgroundModes" "$APP/Info.plist" >/dev/null 2>&1; then
-            echo "::error::Info.plist に不要な UIBackgroundModes が入っています"; exit 1
+          # バックグラウンド動作は小窓（ピクチャ・イン・ピクチャ）に必要な audio だけであること
+          MODES=$(/usr/libexec/PlistBuddy -c "Print UIBackgroundModes" "$APP/Info.plist" 2>/dev/null | grep -v "[{}]" | tr -d ' ' | tr '\n' ',')
+          if [ "$MODES" != "audio," ]; then
+            echo "::error::UIBackgroundModes が想定（audio のみ）と違います: $MODES"; exit 1
           fi
           for P in "$APP/Info.plist" "$APP/PlugIns/Broadcast.appex/Info.plist"; do
             V=$(/usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" "$P")
