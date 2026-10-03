@@ -14,6 +14,16 @@ final class PuzzleRouteUITests: XCTestCase {
         return e.waitForExistence(timeout: 2)
     }
 
+    /// 上にある要素は下へスクロールして表示する
+    @discardableResult
+    private func revealAbove(_ e: XCUIElement, in app: XCUIApplication, maxSwipes: Int = 8) -> Bool {
+        for _ in 0..<maxSwipes {
+            if e.exists && e.isHittable { return true }
+            app.swipeDown()
+        }
+        return e.exists && e.isHittable
+    }
+
     override func setUp() {
         continueAfterFailure = false
     }
@@ -46,13 +56,11 @@ final class PuzzleRouteUITests: XCTestCase {
         sleep(3)   // 見本盤面の探索（約1秒）を待つ
         let summary = app.staticTexts["routeSummary"]
         XCTAssertTrue(reveal(summary, in: app), "見本盤面のルートが表示される")
-        XCTAssertTrue(app.staticTexts["unknownWarning"].exists || app.otherElements["unknownWarning"].exists
-                      || app.descendants(matching: .any)["unknownWarning"].exists, "不明マスの警告が出る")
+        XCTAssertTrue(reveal(app.descendants(matching: .any)["unknownWarning"], in: app), "不明マスの警告が出る")
 
         // 不明マス（上から2段目・左から4列目）をタップして「光」に直す
         let cell = app.buttons["cell-9"]
-        if !cell.isHittable { app.swipeDown() }
-        XCTAssertTrue(reveal(cell, in: app))
+        XCTAssertTrue(revealAbove(cell, in: app), "盤面のマスが表示される")
         cell.tap()
         let light = app.buttons["光"]
         XCTAssertTrue(light.waitForExistence(timeout: 5), "色の選択肢が出る")
