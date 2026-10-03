@@ -186,6 +186,11 @@ final class PuzzleRouteUITests: XCTestCase {
         // 不明マス（上から2段目・左から4列目）をタップして「光」に直す
         let cell = app.buttons["cell-9"]
         XCTAssertTrue(revealAbove(cell, in: app), "盤面のマスが表示される")
+        // 画面下の小窓バーに隠れないよう、マスを画面の上のほうへ動かす
+        for _ in 0..<4 where cell.frame.maxY > app.frame.height * 0.6 {
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.7))
+                .press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.45)))
+        }
         XCTAssertTrue(cell.label.contains("不明"), "対象のマスは不明: \(cell.label)")
         cell.tap()
         let light = app.buttons["光"]
