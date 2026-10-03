@@ -31,7 +31,7 @@ class MainActivity : Activity() {
         fun title(t: String, size: Float = 16f) = TextView(this).apply {
             text = t; textSize = size; setPadding(0, pad, 0, pad / 3)
         }
-        root.addView(title("パズドラ矢印ガイド", 24f))
+        root.addView(title("パズルルート", 24f))
         status = title("", 14f)
         root.addView(status)
 

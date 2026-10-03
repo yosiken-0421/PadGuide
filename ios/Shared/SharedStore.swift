@@ -1,0 +1,110 @@
+import Foundation
+import PuzzleCore
+
+/// アプリ本体と画面共有拡張で共有する保存場所（端末内の App Group）。画像は保存しない。
+enum AppGroup {
+    static let id: String = Bundle.main.object(forInfoDictionaryKey: "PDAppGroup") as? String ?? "group.com.pdguide"
+    static var defaults: UserDefaults { UserDefaults(suiteName: id) ?? .standard }
+    static var container: URL {
+        FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: id) ?? FileManager.default.temporaryDirectory
+    }
+}
+
+/// 探索と認識の設定
+struct AppSettings: Codable, Equatable {
+    /// "auto" | "6x5" | "7x6" | "5x4"
+    var sizeMode = "auto"
+    var maxSteps = 20
+    var timeLimit = 1.0
+    var goals = Goals()
+
+    var fixedSize: BoardSize? {
+        switch sizeMode {
+        case "6x5": return .sixByFive
+        case "7x6": return .sevenBySix
+        case "5x4": return .fiveByFour
+        default: return nil
+        }
+    }
+
+    var solverOptions: SolverOptions {
+        SolverOptions(maxSteps: maxSteps, timeLimit: timeLimit, beamWidth: 2000, goals: goals)
+    }
+}
+
+/// PC ビューアーとの接続情報（同一 LAN 内のみ）
+struct PCConnection: Codable, Equatable {
+    var host: String
+    var port: Int
+    var session: String
+    var expiresAt: Date
+
+    var isExpired: Bool { Date() > expiresAt }
+}
+
+/// 拡張が書き、アプリが読む最新の解析状態（画面共有終了で削除）
+struct LatestState: Codable {
+    var seq: Int
+    var reading: BoardReading?
+    var result: ResultMessage
+}
+
+enum SharedStore {
+    private static let settingsKey = "settings.v1"
+    private static let learnedKey = "learned.v1"
+    private static let connectionKey = "connection.v1"
+    private static let heartbeatKey = "sharing.heartbeat"
+    private static var latestURL: URL { AppGroup.container.appendingPathComponent("latest.json") }
+
+    // MARK: 設定
+    static func loadSettings() -> AppSettings {
+        guard let d = AppGroup.defaults.data(forKey: settingsKey),
+              let s = try? JSONDecoder().decode(AppSettings.self, from: d) else { return AppSettings() }
+        return s
+    }
+    static func saveSettings(_ s: AppSettings) {
+        AppGroup.defaults.set(try? JSONEncoder().encode(s), forKey: settingsKey)
+    }
+
+    // MARK: 手動修正の学習（端末内のみ・外部へ送らない）
+    static func loadLearned() -> [LearnedSample] {
+        guard let d = AppGroup.defaults.data(forKey: learnedKey),
+              let s = try? JSONDecoder().decode([LearnedSample].self, from: d) else { return [] }
+        return s
+    }
+    static func saveLearned(_ s: [LearnedSample]) {
+        AppGroup.defaults.set(try? JSONEncoder().encode(s), forKey: learnedKey)
+    }
+
+    // MARK: 接続
+    static var connection: PCConnection? {
+        get {
+            guard let d = AppGroup.defaults.data(forKey: connectionKey),
+                  let c = try? JSONDecoder().decode(PCConnection.self, from: d), !c.isExpired else { return nil }
+            return c
+        }
+        set {
+            if let v = newValue { AppGroup.defaults.set(try? JSONEncoder().encode(v), forKey: connectionKey) }
+            else { AppGroup.defaults.removeObject(forKey: connectionKey) }
+        }
+    }
+
+    // MARK: 画面共有中の目印
+    static func heartbeat() { AppGroup.defaults.set(Date().timeIntervalSince1970, forKey: heartbeatKey) }
+    static func clearHeartbeat() { AppGroup.defaults.removeObject(forKey: heartbeatKey) }
+    static var isSharing: Bool {
+        let t = AppGroup.defaults.double(forKey: heartbeatKey)
+        return t > 0 && Date().timeIntervalSince1970 - t < 4
+    }
+
+    // MARK: 最新の解析状態
+    static func writeLatest(_ s: LatestState) {
+        guard let d = try? JSONEncoder().encode(s) else { return }
+        try? d.write(to: latestURL, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+    }
+    static func readLatest() -> LatestState? {
+        guard let d = try? Data(contentsOf: latestURL) else { return nil }
+        return try? JSONDecoder().decode(LatestState.self, from: d)
+    }
+    static func clearLatest() { try? FileManager.default.removeItem(at: latestURL) }
+}

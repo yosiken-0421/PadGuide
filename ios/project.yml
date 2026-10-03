@@ -1,44 +1,55 @@
-name: PadGuide
+name: PuzzleRoute
 options:
-  bundleIdPrefix: com.pdguide
+  bundleIdPrefix: com.yosiken0421.padguide
   deploymentTarget:
     iOS: "17.0"
 settings:
   base:
     SWIFT_VERSION: "5.0"
-    DEVELOPMENT_TEAM: ""                 # GitHub Actions では Secrets の APPLE_TEAM_ID で上書き
+    DEVELOPMENT_TEAM: ""                 # GitHub Actions では Secrets の APPLE_TEAM_ID を使う
     CODE_SIGN_STYLE: Automatic
     MARKETING_VERSION: "1.0"
-    CURRENT_PROJECT_VERSION: "1"         # GitHub Actions では実行番号で上書き（毎回増える）
+    CURRENT_PROJECT_VERSION: "1"         # GitHub Actions では毎回増える番号で上書き
+    # App Store Connect に登録済みの Bundle Identifier と一致させること
     PD_BUNDLE_PREFIX: com.yosiken0421.padguide
     PD_APP_GROUP: group.$(PD_BUNDLE_PREFIX)
+packages:
+  PuzzleCore:
+    path: PuzzleCore
 targets:
-  PadGuide:
+  PuzzleRoute:
     type: application
     platform: iOS
     sources:
-      - PadGuide
+      - App
       - Shared
     dependencies:
       - target: Broadcast
-    scheme: {}
+      - package: PuzzleCore
+    scheme:
+      testTargets:
+        - PuzzleRouteUITests
     settings:
       base:
+        PRODUCT_NAME: PuzzleRoute
         PRODUCT_BUNDLE_IDENTIFIER: $(PD_BUNDLE_PREFIX).app
-        CODE_SIGN_ENTITLEMENTS: PadGuide/PadGuide.entitlements
+        CODE_SIGN_ENTITLEMENTS: App/PuzzleRoute.entitlements
         TARGETED_DEVICE_FAMILY: "1"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     info:
-      path: PadGuide/Info.plist
+      path: App/Info.plist
       properties:
-        CFBundleDisplayName: パズドラ矢印ガイド
+        CFBundleDisplayName: パズルルート
         UILaunchScreen: {}
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
         UIBackgroundModes: [audio]
         ITSAppUsesNonExemptEncryption: false
         PDAppGroup: $(PD_APP_GROUP)
+        NSCameraUsageDescription: PC ビューアーに表示された接続用 QR コードを読み取るためにカメラを使います。映像は保存も送信もしません。
+        NSLocalNetworkUsageDescription: 同じ Wi-Fi 内の PC ビューアーを探し、盤面の認識結果とルートを送るためにローカルネットワークを使います。画面の画像は送りません。
+        NSBonjourServices: [_puzzleroute._tcp]
     entitlements:
-      path: PadGuide/PadGuide.entitlements
+      path: App/PuzzleRoute.entitlements
       properties:
         com.apple.security.application-groups: [$(PD_APP_GROUP)]
 
@@ -48,6 +59,8 @@ targets:
     sources:
       - Broadcast
       - Shared
+    dependencies:
+      - package: PuzzleCore
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(PD_BUNDLE_PREFIX).app.broadcast
@@ -56,8 +69,10 @@ targets:
     info:
       path: Broadcast/Info.plist
       properties:
-        CFBundleDisplayName: パズドラ矢印ガイド
+        CFBundleDisplayName: パズルルート
         PDAppGroup: $(PD_APP_GROUP)
+        NSLocalNetworkUsageDescription: 同じ Wi-Fi 内の PC ビューアーへ、盤面の認識結果とルートを送るためにローカルネットワークを使います。画面の画像は送りません。
+        NSBonjourServices: [_puzzleroute._tcp]
         NSExtension:
           NSExtensionPointIdentifier: com.apple.broadcast-services-upload
           NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).SampleHandler
@@ -66,3 +81,16 @@ targets:
       path: Broadcast/Broadcast.entitlements
       properties:
         com.apple.security.application-groups: [$(PD_APP_GROUP)]
+
+  PuzzleRouteUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - UITests
+    dependencies:
+      - target: PuzzleRoute
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(PD_BUNDLE_PREFIX).uitests
+        GENERATE_INFOPLIST_FILE: YES
+        TARGETED_DEVICE_FAMILY: "1"

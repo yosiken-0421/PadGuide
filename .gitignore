@@ -3,7 +3,16 @@ build/
 local.properties
 .idea/
 *.iml
-ios/PadGuide.xcodeproj/
+# iOS（xcodegen で生成されるもの）
+ios/*.xcodeproj/
+ios/App/Info.plist
+ios/App/*.entitlements
+ios/Broadcast/Info.plist
+ios/Broadcast/*.entitlements
+ios/PuzzleCore/.build/
 ios/build/
 ios/Payload/
 *.ipa
+# PC ビューアーのビルド成果物
+viewer/dist/
+viewer/puzzleroute-viewer*
