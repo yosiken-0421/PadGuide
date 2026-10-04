@@ -400,7 +400,7 @@ final class SolverTests: XCTestCase {
         var fake = 0.0
         let wide = Solver.solve(b, options: SolverOptions(maxSteps: 48, timeLimit: 1, beamWidth: 200, maxBeamWidth: 1500),
                                 clock: { fake += 0.000001; return fake })
-        XCTAssertLess(narrow.result.combos, Solver.theoreticalMaxCombos(b), "狭い探索では届かない盤面")
+        XCTAssertLessThan(narrow.result.combos, Solver.theoreticalMaxCombos(b), "狭い探索では届かない盤面")
         XCTAssertGreaterThan(wide.expanded, narrow.expanded, "探し直している")
         XCTAssertGreaterThanOrEqual(wide.result.combos, narrow.result.combos)
         XCTAssertEqual(wide.result.combos, Solver.theoreticalMaxCombos(b), "広げた探索で最大コンボに届く")
