@@ -27,6 +27,14 @@ public struct RouteTracker: Sendable {
         boards = list
     }
 
+    /// 同じ一致度のとき：同じ色どうしを入れ替えた手は前後の盤面が同じになるので、
+    /// 今の位置より先なら、より先の手を選ぶ（操作は前へ進むため）。そうでなければ今の位置に近いほう
+    static func prefer(_ k: Int, over best: Int, progress: Int) -> Bool {
+        if best < 0 { return true }
+        if k >= progress && best >= progress { return k > best }
+        return abs(k - progress) < abs(best - progress)
+    }
+
     static func mismatch(_ a: [OrbKind], _ b: [OrbKind]) -> Int {
         guard a.count == b.count else { return Int.max }
         var n = 0
@@ -40,8 +48,7 @@ public struct RouteTracker: Sendable {
         var best = -1, bestMiss = Int.max
         for (k, b) in boards.enumerated() {
             let m = Self.mismatch(cells, b)
-            // 同点なら今の位置に近いほう
-            if m < bestMiss || (m == bestMiss && abs(k - progress) < abs(best - progress)) {
+            if m < bestMiss || (m == bestMiss && Self.prefer(k, over: best, progress: progress)) {
                 best = k; bestMiss = m
             }
         }
