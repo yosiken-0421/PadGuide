@@ -1,0 +1,35 @@
+[
+  {
+    "attachments" : [
+      {
+        "configurationName" : "Test Scheme Action",
+        "deviceId" : "B6EB7585-6C3D-4B94-88C9-510CA6B7591E",
+        "deviceName" : "P",
+        "exportedFileName" : "5868DCB1-B289-4EEC-894A-15FF61FCDDBD.png",
+        "isAssociatedWithFailure" : false,
+        "suggestedHumanReadableName" : "小窓の図（進み具合 99）_0_C81CFBB1-FD9D-49F3-92CD-CC7B52FCAABD.png",
+        "timestamp" : 1791090191.084
+      },
+      {
+        "configurationName" : "Test Scheme Action",
+        "deviceId" : "B6EB7585-6C3D-4B94-88C9-510CA6B7591E",
+        "deviceName" : "P",
+        "exportedFileName" : "5AD94127-F9EB-453E-A088-4937A0FCDCF9.png",
+        "isAssociatedWithFailure" : false,
+        "suggestedHumanReadableName" : "小窓の図（進み具合 3）_0_58AD0AFC-38B4-4A73-AD26-BE00333352B6.png",
+        "timestamp" : 1791090181.807
+      },
+      {
+        "configurationName" : "Test Scheme Action",
+        "deviceId" : "B6EB7585-6C3D-4B94-88C9-510CA6B7591E",
+        "deviceName" : "P",
+        "exportedFileName" : "CF178751-B00A-40E7-9091-7007244F0D59.png",
+        "isAssociatedWithFailure" : false,
+        "suggestedHumanReadableName" : "小窓の図（進み具合 0）_0_70D8F216-CC68-48D2-87C5-34D6A7D323EA.png",
+        "timestamp" : 1791090168.376
+      }
+    ],
+    "testIdentifier" : "PuzzleRouteUITests/testCapturePiPPreview()",
+    "testIdentifierURL" : "test://com.apple.xcode/PuzzleRoute/PuzzleRouteUITests/PuzzleRouteUITests/testCapturePiPPreview"
+  }
+]
