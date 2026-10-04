@@ -207,7 +207,8 @@ final class PuzzleRouteUITests: XCTestCase {
 
         button.tap()
         XCTAssertFalse(button.isEnabled, "開始中はボタンが無効（連打で二重に開始しない）")
-        XCTAssertTrue(button.label.contains("開始しています"))
+        let starting = expectation(for: NSPredicate(format: "label CONTAINS '開始しています'"), evaluatedWith: button)
+        wait(for: [starting], timeout: 1.5)
 
         let status = app.staticTexts["pipStatus"]
         let failed = expectation(for: NSPredicate(format: "label CONTAINS '小窓を開始できませんでした'"), evaluatedWith: status)
