@@ -95,7 +95,7 @@ final class PiPGuide: NSObject, ObservableObject {
             controller?.stopPictureInPicture()
         case .start:
             if simulateFailure {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
                     self?.state.failedToStart("テスト用に失敗を再現しました")
                 }
                 return
