@@ -26,6 +26,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var learnedCount = 0
 
     private var colors: [RGB] = []
+    /// UI テスト用：見本盤面で「何手目まで進んだか」を指定する（-demoProgress N）
+    private var demoProgress: Int?
     private var latest: LatestState?
     private var lastSeq = -1
     private var timer: Timer?
@@ -37,7 +39,9 @@ final class AppModel: ObservableObject {
         settings = SharedStore.loadSettings()
         connection = SharedStore.connection
         learnedCount = SharedStore.loadLearned().count
-        if ProcessInfo.processInfo.arguments.contains("-demoBoard") { loadDemo() }
+        let args = ProcessInfo.processInfo.arguments
+        if let i = args.firstIndex(of: "-demoProgress"), i + 1 < args.count { demoProgress = Int(args[i + 1]) }
+        if args.contains("-demoBoard") { loadDemo() }
         timer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.poll() }
         }
@@ -127,6 +131,7 @@ final class AppModel: ObservableObject {
                 guard !flag.isCancelled else { return }
                 self.result = msg
                 self.solving = false
+                if let dp = self.demoProgress, msg.status == "ok" { self.progress = min(dp, msg.steps) }
             }
             if !flag.isCancelled { PCLink.push(msg) }
         }

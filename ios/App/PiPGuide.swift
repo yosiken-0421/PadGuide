@@ -285,6 +285,8 @@ struct PiPLayerView: UIViewRepresentable {
 
 /// 画面下部に常に表示する小窓のバー（プレビュー・状態・ボタン・診断）
 struct PiPBar: View {
+    /// UI テスト用：小窓の中身を大きく表示して確認する（-pipPreviewLarge）
+    static let large = ProcessInfo.processInfo.arguments.contains("-pipPreviewLarge")
     @ObservedObject var pip: PiPGuide
     @State private var showDiagnostics = false
 
@@ -292,7 +294,7 @@ struct PiPBar: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 10) {
                 PiPLayerView(layer: pip.displayLayer)
-                    .frame(width: 96, height: 90)
+                    .frame(width: Self.large ? 330 : 96, height: Self.large ? 358 : 104)
                     .clipShape(RoundedRectangle(cornerRadius: 8))
                 VStack(alignment: .leading, spacing: 4) {
                     Button {

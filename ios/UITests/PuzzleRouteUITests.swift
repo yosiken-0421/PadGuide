@@ -156,6 +156,24 @@ final class PuzzleRouteUITests: XCTestCase {
         #endif
     }
 
+    /// 小窓に出す図を大きく表示して記録する（見た目の確認用。開始前・3手目・最後）
+    func testCapturePiPPreview() {
+        for p in ["0", "3", "99"] {
+            let app = XCUIApplication()
+            app.launchArguments = ["-uitest", "-demoBoard", "-demoProgress", p, "-pipPreviewLarge"]
+            app.launch()
+            XCTAssertTrue(app.navigationBars["パズルルート"].waitForExistence(timeout: 10))
+            sleep(4)
+            let preview = app.otherElements["pipPreview"]
+            let shot = preview.exists ? preview.screenshot() : XCUIScreen.main.screenshot()
+            let att = XCTAttachment(screenshot: shot)
+            att.name = "小窓の図（進み具合 \(p)）"
+            att.lifetime = .keepAlways
+            add(att)
+            app.terminate()
+        }
+    }
+
     /// 小窓に対応していない端末では、ボタンが押せず、理由が表示される（シミュレーターの iPhone は非対応）
     func testPictureInPictureButtonDisabledWhenUnsupported() throws {
         let app = XCUIApplication()
