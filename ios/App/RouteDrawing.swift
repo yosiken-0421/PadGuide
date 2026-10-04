@@ -12,6 +12,9 @@ enum RouteDrawing {
 
     static func orbColor(_ k: OrbKind) -> UIColor { UIColor(OrbStyle.color(k)) }
 
+    /// 「次の1手」の色（小窓上部の帯の強調と同じ）
+    static let highlight = UIColor(red: 1, green: 0.84, blue: 0.2, alpha: 1)
+
     /// 手順 i の色（最初は赤 → 最後は紫へ）
     static func stepColor(_ i: Int, of n: Int) -> UIColor {
         let frac = n > 1 ? CGFloat(i) / CGFloat(n - 1) : 0
@@ -78,31 +81,9 @@ enum RouteDrawing {
                 stroke(g, p1, p2, width: cell * 0.12, color: stepColor(i, of: n), outline: UIColor.black.withAlphaComponent(0.7))
                 arrowHead(g, p1, p2, size: cell * 0.22, color: stepColor(i, of: n))
             case .current:
-                stroke(g, p1, p2, width: cell * 0.2, color: .white, outline: UIColor.black.withAlphaComponent(0.85))
-                arrowHead(g, p1, p2, size: cell * 0.34, color: .white)
+                stroke(g, p1, p2, width: cell * 0.18, color: highlight, outline: UIColor.black.withAlphaComponent(0.85))
+                arrowHead(g, p1, p2, size: cell * 0.32, color: highlight)
             }
-        }
-
-        // 手順番号（終わった手には付けない。重ならない位置を探す）
-        var placed: [CGPoint] = []
-        for i in 0..<n where kind(i) != .done {
-            let k = kind(i)
-            if k == .far && n - next > 14 && (i - next) % 2 == 1 { continue }   // 先の手が多いときは間引く
-            let (p1, p2) = seg(i)
-            let rr: CGFloat = k == .current ? max(14, cell * 0.2) : k == .near ? max(11, cell * 0.15) : max(8, cell * 0.11)
-            var m = CGPoint(x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2)
-            for t: CGFloat in [0.5, 0.32, 0.68, 0.2, 0.8] {
-                let c = CGPoint(x: p1.x + (p2.x - p1.x) * t, y: p1.y + (p2.y - p1.y) * t)
-                if placed.allSatisfy({ hypot($0.x - c.x, $0.y - c.y) > rr * 1.8 }) { m = c; break }
-            }
-            placed.append(m)
-            let bg: UIColor = k == .current ? UIColor(red: 1, green: 0.84, blue: 0.2, alpha: 1) : k == .near ? .white : UIColor.white.withAlphaComponent(0.6)
-            bg.setFill()
-            g.fillEllipse(in: CGRect(x: m.x - rr, y: m.y - rr, width: rr * 2, height: rr * 2))
-            g.setStrokeColor(UIColor.black.withAlphaComponent(0.6).cgColor)
-            g.setLineWidth(1.5)
-            g.strokeEllipse(in: CGRect(x: m.x - rr, y: m.y - rr, width: rr * 2, height: rr * 2))
-            label("\(i + 1)", at: m, size: rr * 1.15, color: UIColor(red: 0.08, green: 0.1, blue: 0.18, alpha: 1))
         }
 
         // 終わり（指を離す位置）
@@ -115,20 +96,45 @@ enum RouteDrawing {
         g.stroke(CGRect(x: endP.x - es, y: endP.y - es, width: es * 2, height: es * 2))
         label("終", at: endP, size: es * 1.3, color: .black)
 
-        // 開始位置 or 今の指の位置
+        // 開始位置 or 今の指の位置（最後まで動かしたら出さない）
+        if next < n {
         let here = next == 0 ? start : r.path[min(next, r.path.count - 1)]
         let hp = pt(Double(here % cols) + 0.5, Double(here / cols) + 0.5)
         let ringColor = next == 0 ? UIColor(red: 0.17, green: 0.86, blue: 0.56, alpha: 1) : UIColor(red: 0.2, green: 0.8, blue: 1, alpha: 1)
         g.setStrokeColor(UIColor.black.withAlphaComponent(0.7).cgColor)
-        g.setLineWidth(max(8, cell * 0.13))
+        g.setLineWidth(max(7, cell * 0.11))
         g.strokeEllipse(in: CGRect(x: hp.x - cell * 0.46, y: hp.y - cell * 0.46, width: cell * 0.92, height: cell * 0.92))
         g.setStrokeColor(ringColor.cgColor)
-        g.setLineWidth(max(5, cell * 0.09))
+        g.setLineWidth(max(4, cell * 0.07))
         g.strokeEllipse(in: CGRect(x: hp.x - cell * 0.46, y: hp.y - cell * 0.46, width: cell * 0.92, height: cell * 0.92))
         let tag = next == 0 ? "START" : "いま"
         let tagSize = max(10, cell * 0.17)
         let ty = hp.y - cell * 0.5 < origin.y + tagSize ? hp.y + cell * 0.52 : hp.y - cell * 0.62
         pill(tag, at: CGPoint(x: hp.x, y: ty), size: tagSize, bg: ringColor)
+        }
+
+        // 手順番号（終わった手には付けない。重ならない位置を探す）
+        var placed: [CGPoint] = []
+        for i in 0..<n where kind(i) != .done {
+            let k = kind(i)
+            if k == .far && n - next > 14 && (i - next) % 2 == 1 { continue }   // 先の手が多いときは間引く
+            let (p1, p2) = seg(i)
+            let rr: CGFloat = k == .current ? max(14, cell * 0.2) : k == .near ? max(11, cell * 0.15) : max(8, cell * 0.11)
+            var m = CGPoint(x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2)
+            let ts: [CGFloat] = k == .current ? [0.62, 0.78, 0.5] : [0.5, 0.32, 0.68, 0.2, 0.8]
+            for t in ts {
+                let c = CGPoint(x: p1.x + (p2.x - p1.x) * t, y: p1.y + (p2.y - p1.y) * t)
+                if placed.allSatisfy({ hypot($0.x - c.x, $0.y - c.y) > rr * 1.8 }) { m = c; break }
+            }
+            placed.append(m)
+            let bg: UIColor = k == .current ? highlight : k == .near ? .white : UIColor.white.withAlphaComponent(0.6)
+            bg.setFill()
+            g.fillEllipse(in: CGRect(x: m.x - rr, y: m.y - rr, width: rr * 2, height: rr * 2))
+            g.setStrokeColor(UIColor.black.withAlphaComponent(0.6).cgColor)
+            g.setLineWidth(1.5)
+            g.strokeEllipse(in: CGRect(x: m.x - rr, y: m.y - rr, width: rr * 2, height: rr * 2))
+            label("\(i + 1)", at: m, size: rr * 1.15, color: UIColor(red: 0.08, green: 0.1, blue: 0.18, alpha: 1))
+        }
 
         // 次の数手を光る点がなぞる
         if let ph = phase, next < n {
@@ -162,7 +168,7 @@ enum RouteDrawing {
         for i in next..<min(n, next + 7) {
             let b = CGRect(x: x, y: rect.minY, width: box - 6, height: box - 6)
             let path = UIBezierPath(roundedRect: b, cornerRadius: 10)
-            (i == next ? UIColor(red: 1, green: 0.84, blue: 0.2, alpha: 1) : UIColor.white.withAlphaComponent(0.12)).setFill()
+            (i == next ? highlight : UIColor.white.withAlphaComponent(0.12)).setFill()
             path.fill()
             let arrow = Direction(rawValue: r.moves[i])?.arrow ?? "?"
             label(arrow, at: CGPoint(x: b.midX, y: b.midY + box * 0.04), size: box * 0.55,

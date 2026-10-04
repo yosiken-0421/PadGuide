@@ -194,7 +194,7 @@ final class PiPGuide: NSObject, ObservableObject {
                     } else if p > 0 {
                         title = "\(p)/\(n)手　あと\(n - p)手（\(r.combos)コンボ）"
                     } else if let s = RouteText.start(r) {
-                        title = "\(r.combos)コンボ・\(n)手　つかむ：\(s)"
+                        title = "\(r.combos)コンボ・\(n)手　START：\(s)"
                     }
                 } else {
                     title = RouteText.status(r.status)
@@ -203,7 +203,7 @@ final class PiPGuide: NSObject, ObservableObject {
                 title = "ルートを計算しています…"
             }
             (title as NSString).draw(in: CGRect(x: 14, y: 8, width: size.width - 28, height: 34),
-                                     withAttributes: [.font: UIFont.systemFont(ofSize: 25, weight: .bold), .foregroundColor: titleColor])
+                                     withAttributes: [.font: UIFont.systemFont(ofSize: 22, weight: .bold), .foregroundColor: titleColor])
             // 2行目：次の手順（大きな矢印）
             if let r = res, r.status == "ok" {
                 RouteDrawing.drawNextStrip(g, result: r, progress: content.progress,
@@ -294,7 +294,7 @@ struct PiPBar: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 10) {
                 PiPLayerView(layer: pip.displayLayer)
-                    .frame(width: Self.large ? 330 : 96, height: Self.large ? 358 : 104)
+                    .frame(width: Self.large ? 230 : 96, height: Self.large ? 249 : 104)
                     .clipShape(RoundedRectangle(cornerRadius: 8))
                 VStack(alignment: .leading, spacing: 4) {
                     Button {
