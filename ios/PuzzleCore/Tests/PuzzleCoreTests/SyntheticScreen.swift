@@ -52,6 +52,75 @@ struct SyntheticScreen: PixelSource {
         for i in 0..<buf.count { buf[i] /= f }
     }
 
+    /// 色相・明るさを変えた色（画面の色味のずれの再現用）
+    static func adjust(_ c: RGB, hueShift: Double, valueScale: Double) -> RGB {
+        var (h, sat, v) = c.hsv
+        h = (h + hueShift).truncatingRemainder(dividingBy: 360); if h < 0 { h += 360 }
+        v = min(1, v * valueScale)
+        return hsvToRGB(h, sat, v)
+    }
+
+    static func hsvToRGB(_ h: Double, _ s: Double, _ v: Double) -> RGB {
+        let c = v * s, x = c * (1 - abs((h / 60).truncatingRemainder(dividingBy: 2) - 1)), m = v - c
+        var (r, g, b) = (0.0, 0.0, 0.0)
+        switch h {
+        case ..<60: (r, g, b) = (c, x, 0)
+        case ..<120: (r, g, b) = (x, c, 0)
+        case ..<180: (r, g, b) = (0, c, x)
+        case ..<240: (r, g, b) = (0, x, c)
+        case ..<300: (r, g, b) = (x, 0, c)
+        default: (r, g, b) = (c, 0, x)
+        }
+        func q(_ t: Double) -> UInt8 { UInt8(min(255, max(0, ((t + m) * 255).rounded()))) }
+        return RGB(q(r), q(g), q(b))
+    }
+
+    /// 光沢のある球のようなドロップ（独自デザイン）：中心が明るく縁が暗い、左上に白いハイライト、細かいノイズ
+    mutating func drawShinyBoard(_ board: Board, x: Double, y: Double, cell: Double,
+                                 hueShift: Double = 0, valueScale: Double = 1, seed: UInt64 = 1, enhanced: Bool = false) {
+        var rng = seed
+        func noise() -> Double {
+            rng = rng &* 6364136223846793005 &+ 1442695040888963407
+            return Double((rng >> 33) % 1000) / 1000 - 0.5
+        }
+        let s = board.size
+        for r in 0..<s.rows {
+            for c in 0..<s.cols {
+                let checker = (r + c) % 2 == 0 ? RGB(58, 44, 40) : RGB(72, 54, 46)
+                let x0 = Int(x + Double(c) * cell), y0 = Int(y + Double(r) * cell)
+                fillRect(x: x0, y: y0, w: Int(cell) + 1, h: Int(cell) + 1, checker)
+                guard let base0 = Self.palette[board[r, c]] else { continue }
+                let base = Self.adjust(base0, hueShift: hueShift, valueScale: valueScale)
+                let (bh, bs, bv) = base.hsv
+                let cx = x + (Double(c) + 0.5) * cell, cy = y + (Double(r) + 0.5) * cell
+                let rad = cell * 0.46
+                for yy in max(0, Int(cy - rad))...min(height - 1, Int(cy + rad)) {
+                    for xx in max(0, Int(cx - rad))...min(width - 1, Int(cx + rad)) {
+                        let dx = (Double(xx) + 0.5 - cx) / rad, dy = (Double(yy) + 0.5 - cy) / rad
+                        let d2 = dx * dx + dy * dy
+                        guard d2 <= 1 else { continue }
+                        // 縁ほど暗く、少し彩度を上げる（球の陰影）
+                        var v = bv * (1.08 - 0.55 * d2 * d2) + noise() * 0.06
+                        var sat = min(1, bs * (0.92 + 0.15 * d2))
+                        // 左上の白いハイライト
+                        let hx = dx + 0.38, hy = dy + 0.42
+                        let hl = hx * hx / 0.06 + hy * hy / 0.035
+                        if hl < 1 { v = min(1, v + 0.5 * (1 - hl)); sat *= 0.25 + 0.75 * hl }
+                        v = min(1, max(0, v))
+                        let col = Self.hsvToRGB(bh, sat, v)
+                        let i = (yy * width + xx) * 3
+                        buf[i] = col.r; buf[i + 1] = col.g; buf[i + 2] = col.b
+                    }
+                }
+                if enhanced {
+                    let mx = Int(cx + cell * 0.22), my = Int(cy + cell * 0.22), t = Int(cell * 0.04)
+                    fillRect(x: mx - t * 3, y: my - t / 2, w: t * 6, h: t, RGB(255, 255, 255))
+                    fillRect(x: mx - t / 2, y: my - t * 3, w: t, h: t * 6, RGB(255, 255, 255))
+                }
+            }
+        }
+    }
+
     /// 盤面を描く。enhanced = true なら各ドロップの右下に白い「＋」模様を付ける
     mutating func drawBoard(_ board: Board, x: Double, y: Double, cell: Double, enhanced: Bool = false) {
         let s = board.size

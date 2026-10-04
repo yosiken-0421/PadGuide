@@ -44,6 +44,8 @@ targets:
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         UILaunchScreen: {}
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        # 小窓（ピクチャ・イン・ピクチャ）に必要な「Audio, AirPlay, and Picture in Picture」
+        UIBackgroundModes: [audio]
         ITSAppUsesNonExemptEncryption: false
         PDAppGroup: $(PD_APP_GROUP)
         NSCameraUsageDescription: PC ビューアーに表示された接続用 QR コードを読み取るためにカメラを使います。映像は保存も送信もしません。

@@ -17,11 +17,17 @@ final class AppModel: ObservableObject {
     @Published private(set) var confidence: [Double] = []
     /// 表示中の結果（自動解析 or 手動修正後の再探索）
     @Published private(set) var result: ResultMessage?
+    /// ルートのうち何手目まで操作が進んだか（画面共有中に推定。nil = 不明）
+    @Published private(set) var progress: Int?
+    /// 操作がルートから外れた
+    @Published private(set) var offRoute = false
     @Published private(set) var edited = false
     @Published private(set) var solving = false
     @Published private(set) var learnedCount = 0
 
     private var colors: [RGB] = []
+    /// UI テスト用：見本盤面で「何手目まで進んだか」を指定する（-demoProgress N）
+    private var demoProgress: Int?
     private var latest: LatestState?
     private var lastSeq = -1
     private var timer: Timer?
@@ -33,8 +39,10 @@ final class AppModel: ObservableObject {
         settings = SharedStore.loadSettings()
         connection = SharedStore.connection
         learnedCount = SharedStore.loadLearned().count
-        if ProcessInfo.processInfo.arguments.contains("-demoBoard") { loadDemo() }
-        timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+        let args = ProcessInfo.processInfo.arguments
+        if let i = args.firstIndex(of: "-demoProgress"), i + 1 < args.count { demoProgress = Int(args[i + 1]) }
+        if args.contains("-demoBoard") { loadDemo() }
+        timer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.poll() }
         }
     }
@@ -53,11 +61,11 @@ final class AppModel: ObservableObject {
             // 画面共有が終わってデータが消された
             latest = nil
             lastSeq = -1
-            if !edited { board = nil; result = nil; confidence = []; colors = [] }
+            if !edited { board = nil; result = nil; confidence = []; colors = []; progress = nil; offRoute = false }
         }
         // 接続状態の確認（約 10 秒ごと）
         pingCounter += 1
-        if pingCounter % 20 == 0, !isUITest, SharedStore.connection != nil {
+        if pingCounter % 40 == 0, !isUITest, SharedStore.connection != nil {
             Task {
                 let code = await PCLink.ping()
                 if code == 401 {
@@ -73,11 +81,15 @@ final class AppModel: ObservableObject {
 
     private func apply(_ l: LatestState) {
         let r = l.result
-        let size = BoardSize(cols: r.cols, rows: r.rows)
-        board = Board(size: size, cells: r.cells.map { OrbKind(key: $0) ?? .unknown })
-        confidence = r.confidence.count == size.count ? r.confidence : Array(repeating: 1, count: size.count)
-        colors = l.reading?.cells.map { $0.color } ?? []
-        result = r
+        if r != result {
+            let size = BoardSize(cols: r.cols, rows: r.rows)
+            board = Board(size: size, cells: r.cells.map { OrbKind(key: $0) ?? .unknown })
+            confidence = r.confidence.count == size.count ? r.confidence : Array(repeating: 1, count: size.count)
+            colors = l.reading?.cells.map { $0.color } ?? []
+            result = r
+        }
+        progress = l.progress
+        offRoute = l.offRoute ?? false
     }
 
     // MARK: 手動修正
@@ -93,6 +105,8 @@ final class AppModel: ObservableObject {
         }
         b.cells[index] = kind
         board = b
+        progress = nil
+        offRoute = false
         if index < confidence.count { confidence[index] = 1 }
         edited = true
         resolve()
@@ -117,6 +131,7 @@ final class AppModel: ObservableObject {
                 guard !flag.isCancelled else { return }
                 self.result = msg
                 self.solving = false
+                if let dp = self.demoProgress, msg.status == "ok" { self.progress = min(dp, msg.steps) }
             }
             if !flag.isCancelled { PCLink.push(msg) }
         }

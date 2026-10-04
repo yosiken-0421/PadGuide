@@ -89,6 +89,48 @@ final class RecognitionTests: XCTestCase {
         XCTAssertNil(BoardDetector.detect(sc))
     }
 
+    private func shinyScreen(_ board: Board, hueShift: Double = 0, valueScale: Double = 1, enhanced: Bool = false, seed: UInt64 = 1) -> SyntheticScreen {
+        var sc = SyntheticScreen()
+        let cell = Double(sc.width) / Double(board.size.cols)
+        let y = Double(sc.height) - cell * Double(board.size.rows) - 110
+        sc.drawDecoyRow(y: Int(y) - 300, size: Int(cell * 0.85))
+        sc.drawShinyBoard(board, x: 0, y: y, cell: cell, hueShift: hueShift, valueScale: valueScale, seed: seed, enhanced: enhanced)
+        return sc
+    }
+
+    /// 光沢・陰影・ノイズのある球状のドロップでも正しく読める
+    func testShinyOrbs() {
+        for (i, size) in [S65, S76, BoardSize.fiveByFour].enumerated() {
+            let board = SyntheticScreen.randomBoard(size, seed: 100 + UInt64(i))
+            let rd = BoardDetector.detect(shinyScreen(board, seed: UInt64(i + 1)))
+            XCTAssertEqual(rd?.size, size, "\(size) と判定される")
+            XCTAssertEqual(rd?.board, board, "\(size) の盤面を正しく読む")
+        }
+    }
+
+    /// 強化マークがあっても、光沢のある球で基礎色を読める
+    func testShinyOrbsWithMarks() {
+        let board = SyntheticScreen.randomBoard(S65, seed: 120)
+        XCTAssertEqual(BoardDetector.detect(shinyScreen(board, enhanced: true))?.board, board)
+    }
+
+    /// 画面の色味が少しずれていても（色相のずれ・暗め）読める
+    func testColorShiftAndDimmer() {
+        let board = SyntheticScreen.randomBoard(S65, seed: 130)
+        for (shift, scale) in [(12.0, 1.0), (-12.0, 1.0), (0.0, 0.8), (10.0, 0.85), (-10.0, 0.85)] {
+            let rd = BoardDetector.detect(shinyScreen(board, hueShift: shift, valueScale: scale))
+            XCTAssertEqual(rd?.board, board, "色相 \(shift)°・明るさ \(scale) でも正しく読む")
+        }
+    }
+
+    /// 読めた盤面の信頼度は高く、黄色枠（自信がないマス）が出ない
+    func testConfidenceIsHighForClearOrbs() {
+        let board = SyntheticScreen.randomBoard(S65, seed: 140)
+        guard let rd = BoardDetector.detect(shinyScreen(board)) else { return XCTFail("盤面が見つからない") }
+        XCTAssertTrue(rd.lowConfidenceIndices.isEmpty, "自信がないマス: \(rd.lowConfidenceIndices)")
+        XCTAssertGreaterThan(rd.averageConfidence, 0.75)
+    }
+
     func testLearnedCorrection() {
         var cls = ColorClassifier()
         let odd = RGB(200, 120, 60)   // 橙色：本来は火と判定される
@@ -435,5 +477,153 @@ final class ProtocolTests: XCTestCase {
         XCTAssertNil(s.lastResult)
         XCTAssertFalse(s.isActive)
         XCTAssertFalse(s.feed(rd), "終了後は受け付けない")
+    }
+}
+
+// MARK: - 小窓（ピクチャ・イン・ピクチャ）の状態管理
+
+final class PiPStateTests: XCTestCase {
+
+    private func ready() -> PiPState {
+        var s = PiPState(supported: true)
+        s.setPrepared()
+        s.setPossible(true)
+        return s
+    }
+
+    func testUnsupportedDisablesButtonWithReason() {
+        var s = PiPState(supported: false)
+        s.setPrepared()
+        XCTAssertFalse(s.buttonEnabled, "非対応ならボタンは押せない")
+        XCTAssertEqual(s.statusText, PiPState.unavailableMessage)
+        XCTAssertTrue(s.diagnostics.contains("PiP対応：いいえ"))
+        XCTAssertTrue(s.diagnostics.contains { $0.hasPrefix("開始できない理由：") && $0.contains("対応していません") })
+        XCTAssertEqual(s.pressButton(), .none, "押しても開始しない")
+        XCTAssertNotNil(s.lastError, "押したら理由をエラー欄に出す（何も起きない状態にしない）")
+    }
+
+    func testNotPossibleYetDisablesButton() {
+        var s = PiPState(supported: true)
+        s.setPrepared()
+        XCTAssertFalse(s.buttonEnabled)
+        XCTAssertTrue(s.unavailableReason?.contains("開始できる状態") == true)
+        s.setPossible(true)
+        XCTAssertTrue(s.buttonEnabled)
+        XCTAssertNil(s.unavailableReason)
+    }
+
+    func testDoubleStartIsPrevented() {
+        var s = ready()
+        XCTAssertEqual(s.pressButton(), .start)
+        XCTAssertFalse(s.buttonEnabled, "開始中はボタンを押せない")
+        XCTAssertEqual(s.pressButton(), .none, "連打しても二重に開始しない")
+        XCTAssertEqual(s.pressButton(), .none)
+        XCTAssertEqual(s.startRequests, 1)
+        s.didStart()
+        XCTAssertTrue(s.active)
+        XCTAssertTrue(s.buttonEnabled, "実行中は「閉じる」として押せる")
+        XCTAssertEqual(s.pressButton(), .stop)
+        s.didStop()
+        XCTAssertFalse(s.active)
+        XCTAssertEqual(s.pressButton(), .start)
+        XCTAssertEqual(s.startRequests, 2)
+    }
+
+    func testStartFailureShowsError() {
+        var s = ready()
+        _ = s.pressButton()
+        s.failedToStart("テストの理由")
+        XCTAssertFalse(s.active)
+        XCTAssertFalse(s.starting)
+        XCTAssertEqual(s.lastError, "小窓を開始できませんでした：テストの理由")
+        XCTAssertEqual(s.statusText, s.lastError)
+        XCTAssertTrue(s.diagnostics.contains("最後に発生したエラー：小窓を開始できませんでした：テストの理由"))
+        XCTAssertTrue(s.buttonEnabled, "失敗後はもう一度押せる")
+        XCTAssertEqual(s.pressButton(), .start)
+        XCTAssertNil(s.lastError, "やり直したらエラーを消す")
+    }
+
+    func testNoResponseTimesOutWithMessage() {
+        var s = ready()
+        _ = s.pressButton()
+        s.startTimedOut()
+        XCTAssertFalse(s.starting)
+        XCTAssertEqual(s.lastError, PiPState.notStartedMessage)
+        // 開始済みならタイムアウトは何もしない
+        var t = ready()
+        _ = t.pressButton()
+        t.didStart()
+        t.startTimedOut()
+        XCTAssertNil(t.lastError)
+        XCTAssertTrue(t.active)
+    }
+}
+
+// MARK: - 操作の進み具合
+
+final class RouteTrackerTests: XCTestCase {
+
+    /// ルートの各手順の後の盤面
+    private func boards(_ board: Board, _ path: [Int]) -> [[OrbKind]] {
+        var b = board.cells, out = [b]
+        for k in 1..<path.count { b.swapAt(path[k - 1], path[k]); out.append(b) }
+        return out
+    }
+
+    func testTracksProgressAlongRoute() {
+        for seed: UInt64 in [201, 205, 206] {
+            let board = SyntheticScreen.randomBoard(S65, seed: seed)
+            let route = Solver.solve(board, options: SolverOptions(maxSteps: 20, timeLimit: nil, beamWidth: 200))
+            guard var t = RouteTracker(board: board, path: route.path) else { return XCTFail("追跡を作れない") }
+            let bs = boards(board, route.path)
+            XCTAssertEqual(t.progress, 0)
+            var cur = board
+            var last = 0
+            for k in 1...route.steps {
+                cur.cells.swapAt(route.path[k - 1], route.path[k])
+                t.update(cur.cells)
+                // 盤面から区別できる範囲で正しく、手順を飛ばさない（同じ盤面が続くときは手前の手）
+                let same = bs.indices.filter { bs[$0] == cur.cells && $0 >= last }
+                XCTAssertEqual(t.progress, same.first, "\(k) 手目：盤面に一致するいちばん手前の手")
+                XCTAssertLessThanOrEqual(t.progress, k, "先へ進みすぎない")
+                XCTAssertGreaterThanOrEqual(t.progress, last, "戻らない")
+                if bs[k] != bs[k - 1] { XCTAssertEqual(t.progress, k, "盤面が変わった手は正確に分かる") }
+                XCTAssertFalse(t.offRoute)
+                last = t.progress
+            }
+        }
+    }
+
+    func testToleratesHeldOrbMisread() {
+        let board = SyntheticScreen.randomBoard(S65, seed: 202)
+        let route = Solver.solve(board, options: SolverOptions(maxSteps: 20, timeLimit: nil, beamWidth: 200))
+        var t = RouteTracker(board: board, path: route.path)!
+        let bs = boards(board, route.path)
+        var cur = BoardOps.apply(start: route.start, moves: Array(route.moves.prefix(4)), to: board)!
+        cur.cells[route.path[4]] = .unknown          // 指で持っているドロップが読めない
+        t.update(cur.cells)
+        XCTAssertFalse(t.offRoute, "1マス読めなくてもルート上にいると分かる")
+        XCTAssertTrue((1...4).contains(t.progress), "進み具合が分かる: \(t.progress)")
+        XCTAssertLessThanOrEqual(RouteTracker.mismatch(bs[t.progress], cur.cells), 1)
+    }
+
+    func testDetectsLeavingRoute() {
+        let board = SyntheticScreen.randomBoard(S65, seed: 203)
+        let route = Solver.solve(board, options: SolverOptions(maxSteps: 20, timeLimit: nil, beamWidth: 200))
+        var t = RouteTracker(board: board, path: route.path)!
+        let other = SyntheticScreen.randomBoard(S65, seed: 999)
+        t.update(other.cells)
+        XCTAssertFalse(t.offRoute, "1回だけなら読み違いかもしれないので、まだ外れたとしない")
+        t.update(other.cells)
+        XCTAssertTrue(t.offRoute, "続けて合わなければルートから外れた")
+        t.update(board.cells)
+        XCTAssertFalse(t.offRoute)
+        XCTAssertEqual(t.progress, 0)
+    }
+
+    func testRejectsInvalidPath() {
+        let board = SyntheticScreen.randomBoard(S65, seed: 204)
+        XCTAssertNil(RouteTracker(board: board, path: [0]))
+        XCTAssertNil(RouteTracker(board: board, path: [0, 99]))
     }
 }

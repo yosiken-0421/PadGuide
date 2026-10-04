@@ -4,16 +4,19 @@ import PuzzleCore
 @main
 struct PuzzleRouteApp: App {
     @StateObject private var model = AppModel()
+    @StateObject private var pip = PiPGuide()
     var body: some Scene {
         WindowGroup {
             ContentView()
                 .environmentObject(model)
+                .environmentObject(pip)
         }
     }
 }
 
 struct ContentView: View {
     @EnvironmentObject var model: AppModel
+    @EnvironmentObject var pip: PiPGuide
     @State private var picker = BroadcastPickerHolder()
     @State private var showQR = false
     @State private var showDiscovery = false
@@ -30,7 +33,7 @@ struct ContentView: View {
                 pcSection
                 boardSection
                 settingsSection
-                overlaySection
+                pipSection
                 learnedSection
                 Section {
                     Text(Self.disclaimer)
@@ -39,6 +42,13 @@ struct ContentView: View {
                 }
             }
             .navigationTitle("パズルルート")
+            // 小窓の表示レイヤーは常に画面に置いておく（画面に入っていないと小窓を開始できない）
+            .safeAreaInset(edge: .bottom, spacing: 0) { PiPBar(pip: pip) }
+            .onAppear {
+                pip.prepare(autoStart: !model.isUITest) { [weak m = model] in
+                    PiPContent(board: m?.board, result: m?.result, progress: m?.progress, offRoute: m?.offRoute ?? false)
+                }
+            }
             .sheet(isPresented: $showQR) { QRScannerSheet().environmentObject(model) }
             .sheet(isPresented: $showDiscovery) { DiscoverySheet().environmentObject(model) }
             // 編集するマスの番号はダイアログに渡して保持する（閉じる処理と競合して修正が失われないように）
@@ -113,7 +123,7 @@ struct ContentView: View {
     @ViewBuilder private var boardSection: some View {
         Section {
             if let b = model.board {
-                BoardView(board: b, confidence: model.confidence, result: model.result) { i in
+                BoardView(board: b, confidence: model.confidence, result: model.result, progress: model.progress) { i in
                     editingCell = i
                     showPicker = true
                 }
@@ -191,18 +201,18 @@ struct ContentView: View {
         }
     }
 
-    /// ゲーム画面の上には表示できないことの説明（小窓表示は提供しない）
-    private var overlaySection: some View {
+    /// スマホだけで使うときの説明（小窓の操作は画面下部のバー）
+    private var pipSection: some View {
         Section {
-            Text(Self.overlayNotice)
+            Text(Self.pipNotice)
                 .font(.footnote)
-                .accessibilityIdentifier("overlayNotice")
+                .accessibilityIdentifier("pipNotice")
         } header: {
-            Text("ルートの見かた")
+            Text("スマホだけで使う（小窓表示）")
         }
     }
 
-    static let overlayNotice = "iPhone では、ゲーム画面の上にルートを重ねて表示することはできません。ルートは、このアプリの「認識した盤面」か、PC ビューアーで確認してください。PC ビューアーを使うと、ゲームを操作しながら PC の画面でルートを見られます。"
+    static let pipNotice = "画面下の「小窓で表示」を押すか、画面共有中にゲームへ切り替えると、盤面とルートの図が小窓（ピクチャ・イン・ピクチャ）で表示されます。iOS ではゲーム画面に直接ルートを重ねることはできないため、小窓をパズルの盤面に重ならない位置（画面の上のほう）へ動かして使ってください。PC ビューアーでも同じルートを見られます。"
 
     private var learnedSection: some View {
         Section {

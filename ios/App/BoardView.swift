@@ -34,6 +34,7 @@ struct BoardView: View {
     let board: Board
     let confidence: [Double]
     let result: ResultMessage?
+    var progress: Int? = nil
     var onTapCell: ((Int) -> Void)?
 
     var body: some View {
@@ -84,35 +85,13 @@ struct BoardView: View {
                 ctx.stroke(Path(rect.insetBy(dx: 2, dy: 2)), with: .color(.yellow), lineWidth: max(2, cell * 0.06))
             }
         }
-        guard let res = result, res.status == "ok", !res.arrows.isEmpty, let start = res.start else { return }
-        let n = res.arrows.count
-        for (i, a) in res.arrows.enumerated() {
-            let p1 = CGPoint(x: CGFloat(a[0]) * cell, y: CGFloat(a[1]) * cell)
-            let p2 = CGPoint(x: CGFloat(a[2]) * cell, y: CGFloat(a[3]) * cell)
-            let frac: Double = n > 1 ? Double(i) / Double(n - 1) : 0
-            let hue: Double = (350.0 - 92.0 * frac) / 360.0
-            let color = Color(hue: hue.truncatingRemainder(dividingBy: 1), saturation: 0.75, brightness: 1)
-            var line = Path(); line.move(to: p1); line.addLine(to: p2)
-            ctx.stroke(line, with: .color(.black.opacity(0.75)), style: StrokeStyle(lineWidth: cell * 0.12 + 3, lineCap: .round))
-            ctx.stroke(line, with: .color(color), style: StrokeStyle(lineWidth: cell * 0.12, lineCap: .round))
-            let ang = atan2(p2.y - p1.y, p2.x - p1.x), s = cell * 0.2
-            let t = CGPoint(x: p1.x + (p2.x - p1.x) * 0.72, y: p1.y + (p2.y - p1.y) * 0.72)
-            var head = Path()
-            head.move(to: CGPoint(x: t.x + s * cos(ang), y: t.y + s * sin(ang)))
-            head.addLine(to: CGPoint(x: t.x + s * 0.8 * cos(ang + 2.45), y: t.y + s * 0.8 * sin(ang + 2.45)))
-            head.addLine(to: CGPoint(x: t.x + s * 0.8 * cos(ang - 2.45), y: t.y + s * 0.8 * sin(ang - 2.45)))
-            head.closeSubpath()
-            ctx.fill(head, with: .color(color))
-        }
-        let sc = CGPoint(x: (CGFloat(start % cols) + 0.5) * cell, y: (CGFloat(start / cols) + 0.5) * cell)
-        ctx.stroke(Path(ellipseIn: CGRect(x: sc.x - cell * 0.46, y: sc.y - cell * 0.46, width: cell * 0.92, height: cell * 0.92)),
-                   with: .color(.green), lineWidth: max(3, cell * 0.08))
-        if let last = res.arrows.last {
-            let e = CGPoint(x: CGFloat(last[2]) * cell, y: CGFloat(last[3]) * cell)
-            let s = cell * 0.16
-            let r = CGRect(x: e.x - s, y: e.y - s, width: s * 2, height: s * 2)
-            ctx.fill(Path(r), with: .color(.white))
-            ctx.stroke(Path(r), with: .color(.black), lineWidth: 2)
+        // ルート（小窓と同じ描き方：次の1手を強調、番号、START／いま／終）
+        guard let res = result, res.status == "ok" else { return }
+        let p = progress
+        ctx.withCGContext { cg in
+            UIGraphicsPushContext(cg)
+            RouteDrawing.drawRoute(cg, result: res, origin: .zero, cell: cell, progress: p, phase: nil)
+            UIGraphicsPopContext()
         }
     }
 }
