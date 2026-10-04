@@ -6,7 +6,8 @@ import Foundation
 public struct RouteTracker: Sendable {
     public let path: [Int]
     public let steps: Int
-    private let boards: [[OrbKind]]
+    /// ルートの各手順の後の盤面（先頭が動かす前）
+    public let boards: [[OrbKind]]
     public private(set) var progress = 0
     public private(set) var offRoute = false
     private var missCount = 0

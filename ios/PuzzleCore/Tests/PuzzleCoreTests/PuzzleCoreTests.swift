@@ -142,13 +142,27 @@ final class RecognitionTests: XCTestCase {
     }
 
     func testStabilizerNeedsRepeatedFrames() {
-        var st = BoardStabilizer(requiredFrames: 2)
+        var st = BoardStabilizer(requiredFrames: 2, flickerTolerance: 0)
         let a = SyntheticScreen.randomBoard(S65, seed: 7).cells
         let b = SyntheticScreen.randomBoard(S65, seed: 8).cells
         XCTAssertFalse(st.feed(a))
         XCTAssertFalse(st.feed(b), "変化し続ける（ルーレット等）間は確定しない")
         XCTAssertFalse(st.feed(a))
         XCTAssertTrue(st.feed(a))
+        XCTAssertEqual(st.consensus, a)
+    }
+
+    /// 1マスだけちらつく（光る演出など）フレームが混ざっても確定し、多数決で正しい盤面になる
+    func testStabilizerToleratesFlicker() {
+        var st = BoardStabilizer(requiredFrames: 3, flickerTolerance: 1)
+        let a = SyntheticScreen.randomBoard(S65, seed: 9).cells
+        var glint = a; glint[12] = .unknown
+        XCTAssertFalse(st.feed(a))
+        XCTAssertFalse(st.feed(glint))
+        XCTAssertTrue(st.feed(a), "1マスのちらつきでは確定を妨げない")
+        XCTAssertEqual(st.consensus, a, "多数決でちらついたマスは正しい色になる")
+        var two = a; two[1] = .unknown; two[2] = .unknown
+        XCTAssertFalse(st.feed(two), "2マス以上違えば確定しない")
     }
 }
 
@@ -404,60 +418,83 @@ final class ProtocolTests: XCTestCase {
                      brightness: 0.6)
     }
 
-    /// ルート表示後にドロップを動かしても（＝入れ替えただけ）、途中で別のルートに変わらない
+    /// 3フレーム続けて渡す（確定させる）
+    private func feedStable(_ s: LiveSession, _ b: Board) -> Bool {
+        _ = s.feed(reading(b)); _ = s.feed(reading(b))
+        return s.feed(reading(b))
+    }
+
+    /// 最初の盤面で計算し、そのルートを登録する
+    private func startRoute(_ s: LiveSession, _ start: Board) -> Route {
+        XCTAssertTrue(feedStable(s, start), "最初の盤面でルートを計算する")
+        let route = Solver.solve(start, options: SolverOptions(maxSteps: 20, timeLimit: nil, beamWidth: 200))
+        s.setRoute(boards: RouteTracker(board: start, path: route.path)!.boards)
+        return route
+    }
+
+    /// ルート表示後にドロップを動かしても、途中で別のルートに変わらない
     func testRouteStaysFixedWhileMovingOrbs() {
         let s = LiveSession()
         s.begin()
         let start = SyntheticScreen.randomBoard(S65, seed: 41)
-        XCTAssertFalse(s.feed(reading(start)))
-        XCTAssertTrue(s.feed(reading(start)), "最初の盤面でルートを計算する")
+        let route = startRoute(s, start)
 
-        // 操作の途中で指を止めた盤面（いくつかのドロップが入れ替わっている）
-        let moving = BoardOps.apply(start: 0, moves: [.right, .right, .down, .down, .left, .down], to: start)!
-        XCTAssertNotEqual(moving.cells, start.cells)
-        XCTAssertFalse(s.feed(reading(moving)))
-        XCTAssertFalse(s.feed(reading(moving)), "操作中は再計算しない")
-        XCTAssertFalse(s.feed(reading(moving)))
-
-        // 持っているドロップが一部読み違えられても同じターン扱い
-        var held = moving
-        held.cells[14] = .unknown
-        XCTAssertFalse(s.feed(reading(held)))
-        XCTAssertFalse(s.feed(reading(held)), "読み違い2個までは操作中のまま")
-
+        // 操作の途中で指を止めた盤面（ルートの途中の盤面）
+        for k in [2, 5, route.steps] {
+            let moving = BoardOps.apply(start: route.start, moves: Array(route.moves.prefix(k)), to: start)!
+            XCTAssertFalse(feedStable(s, moving), "\(k) 手目で止めても再計算しない")
+        }
+        // 持っているドロップが読めなくても同じ
+        var held = BoardOps.apply(start: route.start, moves: Array(route.moves.prefix(3)), to: start)!
+        held.cells[route.path[3]] = .unknown
+        XCTAssertFalse(feedStable(s, held), "1マス読めなくても操作中のまま")
         // 指で隠れて読めなくなっても、表示中のルートは手放さない
         s.invalidate()
-        XCTAssertFalse(s.feed(reading(moving)))
-        XCTAssertFalse(s.feed(reading(moving)))
+        XCTAssertFalse(feedStable(s, held))
 
-        // コンボで消えて新しいドロップが落ちてきた盤面（各色の個数が変わる）→ 次のターンとして再計算
+        // コンボで消えて新しいドロップが落ちてきた盤面 → 次の盤面として再計算
         let next = SyntheticScreen.randomBoard(S65, seed: 77)
-        XCTAssertFalse(LiveSession.isSameTurn(start.cells, next.cells))
-        XCTAssertFalse(s.feed(reading(next)))
-        XCTAssertTrue(s.feed(reading(next)), "次の盤面では再計算する")
+        XCTAssertTrue(feedStable(s, next), "次の盤面では自動で再計算する")
+    }
+
+    /// 消えた数が少なく、各色の個数がほとんど変わらない次の盤面も見逃さない
+    func testSmallComboNextBoardIsDetected() {
+        let s = LiveSession()
+        s.begin()
+        let start = Board(size: S65, string: """
+            RRBGLD
+            HBGLDH
+            RBGLDH
+            BGLDHR
+            GLDHRB
+            """)
+        let route = startRoute(s, start)
+        let end = BoardOps.apply(start: route.start, moves: route.moves, to: start)!
+        // 一番上の段の3マスだけが入れ替わった（各色の個数の変化は2個以内）
+        var next = end
+        let top = [0, 1, 2]
+        let colors: [OrbKind] = [.water, .fire, .wood]
+        for (i, c) in zip(top, colors) where next.cells[i] != c { next.cells[i] = c }
+        let changed = zip(end.cells, next.cells).filter { $0 != $1 }.count
+        if changed >= LiveSession.newBoardThreshold {
+            XCTAssertTrue(feedStable(s, next), "3マス以上変われば、色の個数がほぼ同じでも次の盤面として読み直す")
+        }
+        // 色の個数がほぼ同じ別の盤面（ドロップをまとめて並べ替えたような盤面）でも読み直す
+        var shuffled = end
+        shuffled.cells.reverse()
+        XCTAssertTrue(feedStable(s, shuffled), "ルートの途中にない盤面なら読み直す")
     }
 
     func testForceNextSolve() {
         let s = LiveSession()
         s.begin()
         let b = SyntheticScreen.randomBoard(S65, seed: 42)
-        XCTAssertFalse(s.feed(reading(b)))
-        XCTAssertTrue(s.feed(reading(b)))
-        XCTAssertFalse(s.feed(reading(b)), "同じ盤面では再計算しない")
+        XCTAssertTrue(feedStable(s, b))
+        XCTAssertFalse(feedStable(s, b), "同じ盤面では再計算しない")
         s.forceNextSolve()
-        XCTAssertFalse(s.feed(reading(b)))
-        XCTAssertTrue(s.feed(reading(b)), "再探索を指示したら同じ盤面でも再計算する")
+        XCTAssertTrue(feedStable(s, b), "再探索を指示したら同じ盤面でも再計算する")
     }
 
-    func testIsSameTurn() {
-        let a = Board(size: S65, string: String(repeating: "RBGLDH", count: 5)).cells
-        var swapped = a; swapped.swapAt(0, 1); swapped.swapAt(5, 11)
-        XCTAssertTrue(LiveSession.isSameTurn(a, swapped))
-        var three = a; three[0] = .water; three[1] = .water; three[2] = .water   // 火・水・木→水水水（2個変化）
-        XCTAssertTrue(LiveSession.isSameTurn(a, three))
-        three[3] = .water; three[4] = .water                                    // さらに変化
-        XCTAssertFalse(LiveSession.isSameTurn(a, three))
-    }
 
     func testLiveSessionDiscardsOnShareEnd() {
         let s = LiveSession()
@@ -468,7 +505,8 @@ final class ProtocolTests: XCTestCase {
         let rd = BoardReader.read(sc, rect: BoardRect(x: 0, y: 1400, cell: Double(sc.width) / 6, size: S65),
                                   classifier: ColorClassifier())
         XCTAssertFalse(s.feed(rd))
-        XCTAssertTrue(s.feed(rd), "2フレーム同じなら確定")
+        XCTAssertFalse(s.feed(rd))
+        XCTAssertTrue(s.feed(rd), "3フレームほぼ同じなら確定")
         XCTAssertFalse(s.feed(rd), "盤面に変化がなければ再計算しない")
         s.store(result: ResultMessage.make(board: b, confidence: [], route: nil, goals: Goals(), status: "nocombo", source: "iphone"))
         XCTAssertNotNil(s.lastReading); XCTAssertNotNil(s.lastResult)

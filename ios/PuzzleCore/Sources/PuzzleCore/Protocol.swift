@@ -203,7 +203,12 @@ public final class LiveSession: @unchecked Sendable {
     private var _lastReading: BoardReading?
     private var _lastSolved: [OrbKind]?
     private var _lastResult: ResultMessage?
-    private var _stabilizer = BoardStabilizer()
+    private var _stabilizer = BoardStabilizer(requiredFrames: 3, flickerTolerance: 1)
+    /// 表示中のルートで起こりうる盤面（各手順の後の盤面）。ルートがなければ計算した盤面だけ
+    private var _routeBoards: [[OrbKind]] = []
+    private var _stableCells: [OrbKind]?
+    /// 表示中のルートのどの盤面とも、このマス数以上違えば「次の盤面」とみなす
+    public static let newBoardThreshold = 3
     public private(set) var isActive = false
 
     public init() {}
@@ -214,37 +219,39 @@ public final class LiveSession: @unchecked Sendable {
         isActive = true
     }
 
-    /// 新しい読み取り結果を渡す。確定した「次のターンの盤面」なら true（＝再計算が必要）
+    /// 新しい読み取り結果を渡す。確定した「次の盤面」なら true（＝再計算が必要）
     ///
-    /// ルートを表示した後にドロップを動かすと盤面は変わるが、ドロップは入れ替わるだけなので
-    /// 各色の個数は変わらない。個数がほぼ同じ間は「操作中（同じターン）」とみなして再計算せず、
-    /// 表示中のルートを固定する。コンボで消えて新しいドロップが落ちてくると個数が変わるので、
-    /// そこで初めて次の盤面として再計算する。
+    /// ルートを表示した後は、ドロップを動かしている間の盤面は「ルートの途中の盤面」のどれかと一致する。
+    /// 今の盤面がルートの途中のどの盤面とも 3 マス以上違えば、コンボで消えて新しいドロップが落ちてきた
+    /// 次の盤面とみなして再計算する（消えた数が少なく、各色の個数がほとんど変わらない場合も見逃さない）。
+    /// 指を止めている間など、ルートの途中の盤面と一致している間は再計算せず、表示中のルートを固定する。
     public func feed(_ reading: BoardReading) -> Bool {
         lock.lock(); defer { lock.unlock() }
         guard isActive else { return false }
         _lastReading = reading
-        let cells = reading.cells.map { $0.kind }
-        guard _stabilizer.feed(cells) else { return false }
-        if let solved = _lastSolved, LiveSession.isSameTurn(solved, cells) { return false }
+        guard _stabilizer.feed(reading.cells.map { $0.kind }), let cells = _stabilizer.consensus else { return false }
+        _stableCells = cells
+        if !_routeBoards.isEmpty {
+            let closest = _routeBoards.map { BoardStabilizer.mismatch($0, cells) }.min() ?? Int.max
+            if closest < Self.newBoardThreshold { return false }   // ルートの途中（操作中・変化なし）
+        }
         _lastSolved = cells
+        _routeBoards = [cells]          // ルートが決まるまでは、この盤面と比べる
         return true
     }
 
-    /// 2つの盤面が同じターン（ドロップを入れ替えただけ）か。
-    /// 指で持っているドロップなどの読み違いを考えて、2個までの違いは同じとみなす。
-    public static func isSameTurn(_ a: [OrbKind], _ b: [OrbKind], tolerance: Int = 2) -> Bool {
-        guard a.count == b.count else { return false }
-        var diff = [Int](repeating: 0, count: OrbKind.allCases.count)
-        for k in a { diff[Int(k.rawValue)] += 1 }
-        for k in b { diff[Int(k.rawValue)] -= 1 }
-        let changed = diff.reduce(0) { $0 + abs($1) } / 2
-        return changed <= tolerance
+    /// 確定した盤面（直近のフレームの多数決）。再計算にはこれを使う
+    public var stableCells: [OrbKind]? { lock.lock(); defer { lock.unlock() }; return _stableCells }
+
+    /// 計算したルートで起こりうる盤面を登録する（ルートがなければ計算した盤面だけ）
+    public func setRoute(boards: [[OrbKind]]) {
+        lock.lock(); defer { lock.unlock() }
+        if !boards.isEmpty { _routeBoards = boards }
     }
 
     /// 表示中のルートを手放して、次に確定した盤面で必ず再計算する（「再探索」など）
     public func forceNextSolve() {
-        lock.lock(); _lastSolved = nil; _stabilizer.reset(); lock.unlock()
+        lock.lock(); _lastSolved = nil; _routeBoards = []; _stabilizer.reset(); lock.unlock()
     }
 
     public func store(result: ResultMessage) {
@@ -271,6 +278,8 @@ public final class LiveSession: @unchecked Sendable {
         _lastReading = nil
         _lastSolved = nil
         _lastResult = nil
+        _routeBoards = []
+        _stableCells = nil
         _stabilizer.reset()
     }
 }

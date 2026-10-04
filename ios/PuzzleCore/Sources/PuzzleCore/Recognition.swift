@@ -394,16 +394,47 @@ public enum BoardDetector {
 /// 同じ盤面が続いたら確定する（ルーレットのように変化し続ける間は確定しない）
 public struct BoardStabilizer: Sendable {
     public let requiredFrames: Int
-    private var last: [OrbKind]?
-    private var count = 0
+    /// 連続するフレームの間で、違ってよいマス数（光る演出・持っているドロップなどのちらつき）
+    public let flickerTolerance: Int
+    private var recent: [[OrbKind]] = []
+    /// 確定した盤面（直近のフレームのマスごとの多数決）
+    public private(set) var consensus: [OrbKind]?
 
-    public init(requiredFrames: Int = 2) { self.requiredFrames = requiredFrames }
-
-    /// 確定した盤面なら true
-    public mutating func feed(_ cells: [OrbKind]) -> Bool {
-        if cells == last { count += 1 } else { last = cells; count = 1 }
-        return count >= requiredFrames
+    public init(requiredFrames: Int = 2, flickerTolerance: Int = 1) {
+        self.requiredFrames = requiredFrames
+        self.flickerTolerance = flickerTolerance
     }
 
-    public mutating func reset() { last = nil; count = 0 }
+    /// 直近のフレームがほぼ同じなら確定して true（ルーレットのように変化し続ける間は確定しない）
+    public mutating func feed(_ cells: [OrbKind]) -> Bool {
+        if let last = recent.last, last.count != cells.count { recent.removeAll() }
+        recent.append(cells)
+        if recent.count > requiredFrames { recent.removeFirst(recent.count - requiredFrames) }
+        guard recent.count == requiredFrames else { consensus = nil; return false }
+        for a in 0..<recent.count {
+            for b in (a + 1)..<recent.count where Self.mismatch(recent[a], recent[b]) > flickerTolerance {
+                consensus = nil
+                return false
+            }
+        }
+        // マスごとの多数決（同数なら新しいフレーム）
+        var out = cells
+        for i in cells.indices {
+            var tally: [OrbKind: Int] = [:]
+            for f in recent { tally[f[i], default: 0] += 1 }
+            let top = tally.values.max() ?? 0
+            if let pick = recent.reversed().first(where: { tally[$0[i]] == top }) { out[i] = pick[i] }
+        }
+        consensus = out
+        return true
+    }
+
+    public mutating func reset() { recent.removeAll(); consensus = nil }
+
+    static func mismatch(_ a: [OrbKind], _ b: [OrbKind]) -> Int {
+        guard a.count == b.count else { return Int.max }
+        var n = 0
+        for i in a.indices where a[i] != b[i] { n += 1 }
+        return n
+    }
 }

@@ -121,16 +121,22 @@ final class SampleHandler: RPBroadcastSampleHandler {
         cancelFlag = flag
         let options = settings.solverOptions
         let goals = settings.goals
+        // 直近のフレームの多数決で確定した盤面を使う（1フレームだけの読み違いを入れない）
+        let stable = session.stableCells
         solveQueue.async { [weak self] in
             guard let self, !flag.isCancelled else { return }
-            let board = reading.board
+            var board = reading.board
+            if let st = stable, st.count == board.cells.count { board = Board(size: board.size, cells: st) }
             let route = Solver.solve(board, options: options, cancel: flag)
             guard !flag.isCancelled else { return }
             let msg = ResultMessage.make(board: board, confidence: reading.cells.map { $0.confidence }, route: route,
                                          goals: goals, status: route.result.combos > 0 ? "ok" : "nocombo", source: "iphone")
             self.session.store(result: msg)
+            let newTracker = msg.status == "ok" ? RouteTracker(board: board, path: msg.path) : nil
+            // このルートで起こりうる盤面を登録（これと違う盤面になったら自動で読み直す）
+            self.session.setRoute(boards: newTracker?.boards ?? [board.cells])
             self.lock.lock()
-            self.tracker = msg.status == "ok" ? RouteTracker(board: board, path: msg.path) : nil
+            self.tracker = newTracker
             self.shownResult = msg
             self.shownReading = reading
             self.lock.unlock()
