@@ -25,27 +25,45 @@ public struct EvalResult: Equatable, Sendable {
     public var fiveColors: Bool { (0...4).allSatisfy { combosByKind[$0] > 0 } }
 }
 
-/// 消去・落下・連鎖の計算。作業用配列を使い回すため、1インスタンスを複数スレッドで共有しないこと。
+/// 消去・落下・連鎖の計算。作業用の領域を使い回すため、1インスタンスを複数スレッドで共有しないこと。
+/// 探索では1秒に数十万回呼ぶので、評価ごとのメモリ確保をしない作りにしている。
 public final class Evaluator {
     public let size: BoardSize
-    private var g: [Int8]
-    private var mark: [Bool]
-    private var visited: [Bool]
-    private var inGroup: [Bool]
-    private var stack: [Int]
-    private var group: [Int]
+    private let n: Int
+    private let g: UnsafeMutablePointer<Int8>
+    private let mark: UnsafeMutablePointer<Bool>
+    private let visited: UnsafeMutablePointer<Bool>
+    private let inGroup: UnsafeMutablePointer<Bool>
+    private let stack: UnsafeMutablePointer<Int>
+    private let group: UnsafeMutablePointer<Int>
+    private var groupCount = 0
+
+    static let kindCount = OrbKind.allCases.count
+
+    // 直前の評価結果（探索用。evaluate を呼ぶたびに上書き）
+    private(set) var qCombos = 0
+    private(set) var qCleared = 0
+    let qClearedByKind: UnsafeMutablePointer<Int>
+    let qCombosByKind: UnsafeMutablePointer<Int>
+    /// ClearShape.allCases の順のビット
+    private(set) var qShapes: UInt8 = 0
 
     public init(size: BoardSize) {
         self.size = size
-        let n = size.count
-        g = [Int8](repeating: -1, count: n)
-        mark = [Bool](repeating: false, count: n)
-        visited = [Bool](repeating: false, count: n)
-        inGroup = [Bool](repeating: false, count: n)
-        stack = []
-        stack.reserveCapacity(n)
-        group = []
-        group.reserveCapacity(n)
+        n = size.count
+        g = .allocate(capacity: n); g.initialize(repeating: -1, count: n)
+        mark = .allocate(capacity: n); mark.initialize(repeating: false, count: n)
+        visited = .allocate(capacity: n); visited.initialize(repeating: false, count: n)
+        inGroup = .allocate(capacity: n); inGroup.initialize(repeating: false, count: n)
+        stack = .allocate(capacity: n); stack.initialize(repeating: 0, count: n)
+        group = .allocate(capacity: n); group.initialize(repeating: 0, count: n)
+        qClearedByKind = .allocate(capacity: Self.kindCount); qClearedByKind.initialize(repeating: 0, count: Self.kindCount)
+        qCombosByKind = .allocate(capacity: Self.kindCount); qCombosByKind.initialize(repeating: 0, count: Self.kindCount)
+    }
+
+    deinit {
+        g.deallocate(); mark.deallocate(); visited.deallocate(); inGroup.deallocate()
+        stack.deallocate(); group.deallocate(); qClearedByKind.deallocate(); qCombosByKind.deallocate()
     }
 
     public func evaluate(_ board: Board) -> EvalResult {
@@ -54,10 +72,26 @@ public final class Evaluator {
 
     /// raw: OrbKind.rawValue の配列（-1 は空き）
     public func evaluate(raw: [Int8]) -> EvalResult {
-        let C = size.cols, R = size.rows, N = size.count
-        precondition(raw.count == N)
-        for i in 0..<N { g[i] = raw[i] }
+        precondition(raw.count == n)
+        raw.withUnsafeBufferPointer { run($0.baseAddress!, shapes: true) }
         var res = EvalResult()
+        res.combos = qCombos
+        res.cleared = qCleared
+        for k in 0..<Self.kindCount {
+            res.clearedByKind[k] = qClearedByKind[k]
+            res.combosByKind[k] = qCombosByKind[k]
+        }
+        for (i, s) in ClearShape.allCases.enumerated() where qShapes & (1 << UInt8(i)) != 0 { res.shapes.insert(s) }
+        return res
+    }
+
+    /// 探索用の評価。結果は qCombos などに入る。shapes が false なら形の判定を省く（速い）
+    func run(_ src: UnsafePointer<Int8>, shapes: Bool) {
+        let C = size.cols, R = size.rows, N = n
+        let g = self.g, mark = self.mark, visited = self.visited, stack = self.stack, group = self.group
+        for i in 0..<N { g[i] = src[i] }
+        qCombos = 0; qCleared = 0; qShapes = 0
+        for k in 0..<Self.kindCount { qClearedByKind[k] = 0; qCombosByKind[k] = 0 }
         let unknown = OrbKind.unknown.rawValue
 
         while true {
@@ -66,8 +100,9 @@ public final class Evaluator {
             // 横に3個以上
             if C >= 3 {
                 for r in 0..<R {
+                    let base = r * C
                     for c in 0...(C - 3) {
-                        let i = r * C + c
+                        let i = base + c
                         let v = g[i]
                         if v >= 0 && v != unknown && g[i + 1] == v && g[i + 2] == v {
                             mark[i] = true; mark[i + 1] = true; mark[i + 2] = true; any = true
@@ -77,13 +112,10 @@ public final class Evaluator {
             }
             // 縦に3個以上
             if R >= 3 {
-                for r in 0...(R - 3) {
-                    for c in 0..<C {
-                        let i = r * C + c
-                        let v = g[i]
-                        if v >= 0 && v != unknown && g[i + C] == v && g[i + 2 * C] == v {
-                            mark[i] = true; mark[i + C] = true; mark[i + 2 * C] = true; any = true
-                        }
+                for i in 0..<(N - 2 * C) {
+                    let v = g[i]
+                    if v >= 0 && v != unknown && g[i + C] == v && g[i + 2 * C] == v {
+                        mark[i] = true; mark[i + C] = true; mark[i + 2 * C] = true; any = true
                     }
                 }
             }
@@ -93,75 +125,78 @@ public final class Evaluator {
             for i in 0..<N { visited[i] = false }
             for i in 0..<N where mark[i] && !visited[i] {
                 let color = g[i]
-                group.removeAll(keepingCapacity: true)
-                stack.removeAll(keepingCapacity: true)
-                stack.append(i)
+                var sp = 0
+                groupCount = 0
+                stack[sp] = i; sp += 1
                 visited[i] = true
-                while let p = stack.popLast() {
-                    group.append(p)
-                    let pr = p / C, pc = p % C
-                    if pr > 0 { push(p - C, color) }
-                    if pr < R - 1 { push(p + C, color) }
-                    if pc > 0 { push(p - 1, color) }
-                    if pc < C - 1 { push(p + 1, color) }
+                while sp > 0 {
+                    sp -= 1
+                    let p = stack[sp]
+                    group[groupCount] = p; groupCount += 1
+                    let pc = p % C
+                    var q = p - C
+                    if q >= 0 && mark[q] && !visited[q] && g[q] == color { visited[q] = true; stack[sp] = q; sp += 1 }
+                    q = p + C
+                    if q < N && mark[q] && !visited[q] && g[q] == color { visited[q] = true; stack[sp] = q; sp += 1 }
+                    if pc > 0 {
+                        q = p - 1
+                        if mark[q] && !visited[q] && g[q] == color { visited[q] = true; stack[sp] = q; sp += 1 }
+                    }
+                    if pc < C - 1 {
+                        q = p + 1
+                        if mark[q] && !visited[q] && g[q] == color { visited[q] = true; stack[sp] = q; sp += 1 }
+                    }
                 }
-                res.combos += 1
-                res.cleared += group.count
-                res.combosByKind[Int(color)] += 1
-                res.clearedByKind[Int(color)] += group.count
-                detectShapes(into: &res.shapes)
+                qCombos += 1
+                qCleared += groupCount
+                qCombosByKind[Int(color)] += 1
+                qClearedByKind[Int(color)] += groupCount
+                if shapes { detectShapes() }
             }
 
             for i in 0..<N where mark[i] { g[i] = -1 }
             // 落下
             for c in 0..<C {
-                var w = R - 1
-                for r in stride(from: R - 1, through: 0, by: -1) {
-                    let v = g[r * C + c]
-                    if v != -1 {
-                        g[w * C + c] = v
-                        w -= 1
-                    }
+                var w = (R - 1) * C + c
+                var i = w
+                while i >= 0 {
+                    let v = g[i]
+                    if v != -1 { g[w] = v; w -= C }
+                    i -= C
                 }
-                while w >= 0 {
-                    g[w * C + c] = -1
-                    w -= 1
-                }
+                while w >= 0 { g[w] = -1; w -= C }
             }
         }
-        return res
     }
 
-    private func push(_ q: Int, _ color: Int8) {
-        if mark[q] && !visited[q] && g[q] == color {
-            visited[q] = true
-            stack.append(q)
-        }
+    private func bit(_ s: ClearShape) -> UInt8 {
+        UInt8(1) << UInt8(ClearShape.allCases.firstIndex(of: s)!)
     }
 
     /// 直前に作った group の形を判定
-    private func detectShapes(into shapes: inout Set<ClearShape>) {
+    private func detectShapes() {
         let C = size.cols, R = size.rows
-        let n = group.count
-        guard n == 5 || n == 9 || n >= C else { return }
-        for p in group { inGroup[p] = true }
-        defer { for p in group { inGroup[p] = false } }
+        let cnt = groupCount
+        guard cnt == 5 || cnt == 9 || cnt >= C else { return }
+        for k in 0..<cnt { inGroup[group[k]] = true }
+        defer { for k in 0..<cnt { inGroup[group[k]] = false } }
 
         // 横1列：ある行のマスがすべて含まれる
-        if n >= C {
+        if cnt >= C {
             for r in 0..<R {
                 var full = true
                 for c in 0..<C where !inGroup[r * C + c] { full = false; break }
-                if full { shapes.insert(.row); break }
+                if full { qShapes |= bit(.row); break }
             }
         }
-        if n == 5 {
-            for p in group {
+        if cnt == 5 {
+            for k in 0..<cnt {
+                let p = group[k]
                 let r = p / C, c = p % C
                 // 十字：中心の上下左右がすべて含まれる
                 if r > 0, r < R - 1, c > 0, c < C - 1,
                    inGroup[p - C], inGroup[p + C], inGroup[p - 1], inGroup[p + 1] {
-                    shapes.insert(.cross)
+                    qShapes |= bit(.cross)
                 }
                 // L字：角から横に3個、縦に3個
                 for dc in [-1, 1] {
@@ -170,18 +205,20 @@ public final class Evaluator {
                         guard c2 >= 0, c2 < C, r2 >= 0, r2 < R else { continue }
                         if inGroup[p + dc], inGroup[p + 2 * dc],
                            inGroup[p + dr * C], inGroup[p + 2 * dr * C] {
-                            shapes.insert(.lShape)
+                            qShapes |= bit(.lShape)
                         }
                     }
                 }
             }
         }
-        if n == 9 {
-            let rows = group.map { $0 / C }, cols = group.map { $0 % C }
-            if let r0 = rows.min(), let r1 = rows.max(), let c0 = cols.min(), let c1 = cols.max(),
-               r1 - r0 == 2, c1 - c0 == 2 {
-                shapes.insert(.square)
+        if cnt == 9 {
+            var r0 = Int.max, r1 = Int.min, c0 = Int.max, c1 = Int.min
+            for k in 0..<cnt {
+                let p = group[k]
+                r0 = min(r0, p / C); r1 = max(r1, p / C)
+                c0 = min(c0, p % C); c1 = max(c1, p % C)
             }
+            if r1 - r0 == 2, c1 - c0 == 2 { qShapes |= bit(.square) }
         }
     }
 }

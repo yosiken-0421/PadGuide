@@ -351,6 +351,69 @@ final class SolverTests: XCTestCase {
         let r = Solver.solve(b, options: SolverOptions(maxSteps: 20, timeLimit: nil, beamWidth: 300, goals: g))
         XCTAssertGreaterThan(r.result.healCleared, 0, "回復を優先すると回復を消す")
     }
+
+    /// 色ごとの個数から決まる最大コンボ数（不明マスは数えない）
+    func testTheoreticalMaxCombos() {
+        let b = Board(size: S65, string: """
+            RRRRRR
+            BBBBB?
+            GGGG??
+            LLL???
+            DDHH??
+            """)
+        // 火6→2、水5→1、木4→1、光3→1、闇2→0、回復2→0
+        XCTAssertEqual(Solver.theoreticalMaxCombos(b), 5)
+    }
+
+    /// 最大コンボに届いたら、それ以上長いルートを探さない
+    func testStopsAtMaxCombos() {
+        let b = Board(size: S65, string: """
+            RR?R??
+            ??????
+            ??????
+            ??????
+            ??????
+            """)
+        let r = Solver.solve(b, options: SolverOptions(maxSteps: 48, timeLimit: nil, beamWidth: 500))
+        XCTAssertEqual(r.result.combos, Solver.theoreticalMaxCombos(b))
+        XCTAssertEqual(r.steps, 1)
+    }
+
+    /// ランダムな盤面の多くで、盤面で組める最大コンボ数に届く
+    func testReachesMaxCombosOnMostBoards() {
+        var hit = 0
+        for seed: UInt64 in 300..<308 {
+            let b = SyntheticScreen.randomBoard(S65, seed: seed)
+            let r = Solver.solve(b, options: SolverOptions(maxSteps: 48, timeLimit: nil, beamWidth: 1500))
+            let after = BoardOps.apply(start: r.start, moves: r.moves, to: b)!
+            XCTAssertEqual(Evaluator(size: S65).evaluate(after), r.result, "ルートの評価が正しい")
+            XCTAssertLessThanOrEqual(r.result.combos, Solver.theoreticalMaxCombos(b))
+            if r.result.combos == Solver.theoreticalMaxCombos(b) { hit += 1 }
+        }
+        XCTAssertGreaterThanOrEqual(hit, 4, "8盤面中 \(hit) 盤面で最大コンボ")
+    }
+
+    /// 時間が残っていれば、探索幅を広げて探し直して最大コンボに近づける
+    func testWidensSearchWhenTimeRemains() {
+        let b = SyntheticScreen.randomBoard(S65, seed: 311)
+        let narrow = Solver.solve(b, options: SolverOptions(maxSteps: 48, timeLimit: nil, beamWidth: 200))
+        var fake = 0.0
+        let wide = Solver.solve(b, options: SolverOptions(maxSteps: 48, timeLimit: 1, beamWidth: 200, maxBeamWidth: 1500),
+                                clock: { fake += 0.000001; return fake })
+        XCTAssertLess(narrow.result.combos, Solver.theoreticalMaxCombos(b), "狭い探索では届かない盤面")
+        XCTAssertGreaterThan(wide.expanded, narrow.expanded, "探し直している")
+        XCTAssertGreaterThanOrEqual(wide.result.combos, narrow.result.combos)
+        XCTAssertEqual(wide.result.combos, Solver.theoreticalMaxCombos(b), "広げた探索で最大コンボに届く")
+        XCTAssertFalse(wide.stoppedEarly)
+    }
+
+    func testResultMessageMaxCombos() {
+        let b = SyntheticScreen.randomBoard(S65, seed: 311)
+        let r = Solver.solve(b, options: SolverOptions(maxSteps: 48, timeLimit: nil, beamWidth: 1500))
+        let msg = ResultMessage.make(board: b, confidence: [], route: r, goals: Goals(), status: "ok", source: "iphone")
+        XCTAssertEqual(msg.maxCombos, Solver.theoreticalMaxCombos(b))
+        XCTAssertEqual(msg.reachedMaxCombos, r.result.combos >= msg.maxCombos)
+    }
 }
 
 // MARK: - 通信・接続・破棄

@@ -81,3 +81,29 @@ test('時間制限で止まる', () => {
   const r = S.solve(rnd(42, 14), 7, 6, { maxSteps: 48, timeLimitMs: 1000, beamWidth: 3000, now: () => (t += 10) });
   assert.ok(r.stoppedEarly);
 });
+
+test('最大コンボ数（色ごとの個数から）', () => {
+  assert.strictEqual(S.theoreticalMax(board(`RRRRRR BBBBB? GGGG?? LLL??? DDHH??`)), 5);
+});
+
+test('ランダムな盤面の多くで最大コンボに届く', () => {
+  let hit = 0;
+  for (let seed = 300; seed < 306; seed++) {
+    const b = rnd(30, seed);
+    const r = S.solve(b, 6, 5, { maxSteps: 48, timeLimitMs: null, beamWidth: 1500 });
+    const after = S.applyMoves(b, 6, 5, r.start, r.moves);
+    assert.strictEqual(S.evaluate(after, 6, 5).combos, r.result.combos);
+    assert.ok(r.result.combos <= r.maxCombos);
+    if (r.reachedMax) hit++;
+  }
+  assert.ok(hit >= 3, `6盤面中 ${hit} 盤面で最大コンボ`);
+});
+
+test('時間が残っていれば探索幅を広げて探し直す', () => {
+  const b = rnd(30, 311);
+  const narrow = S.solve(b, 6, 5, { maxSteps: 48, timeLimitMs: null, beamWidth: 200 });
+  let t = 0;
+  const wide = S.solve(b, 6, 5, { maxSteps: 48, timeLimitMs: 1000, beamWidth: 200, maxBeamWidth: 1500, now: () => (t += 0.001) });
+  assert.ok(wide.expanded > narrow.expanded);
+  assert.ok(wide.result.combos >= narrow.result.combos);
+});

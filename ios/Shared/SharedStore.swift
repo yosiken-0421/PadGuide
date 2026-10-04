@@ -14,7 +14,7 @@ enum AppGroup {
 struct AppSettings: Codable, Equatable {
     /// "auto" | "6x5" | "7x6" | "5x4"
     var sizeMode = "auto"
-    var maxSteps = 20
+    var maxSteps = SolverOptions.defaultSteps
     var timeLimit = 1.0
     var goals = Goals()
 
@@ -28,7 +28,7 @@ struct AppSettings: Codable, Equatable {
     }
 
     var solverOptions: SolverOptions {
-        SolverOptions(maxSteps: maxSteps, timeLimit: timeLimit, beamWidth: 2000, goals: goals)
+        SolverOptions(maxSteps: maxSteps, timeLimit: timeLimit, beamWidth: 800, maxBeamWidth: 12_000, goals: goals)
     }
 }
 
@@ -63,7 +63,9 @@ enum SharedStore {
     // MARK: 設定
     static func loadSettings() -> AppSettings {
         guard let d = AppGroup.defaults.data(forKey: settingsKey),
-              let s = try? JSONDecoder().decode(AppSettings.self, from: d) else { return AppSettings() }
+              var s = try? JSONDecoder().decode(AppSettings.self, from: d) else { return AppSettings() }
+        // 以前の選択肢（20手など）は、最大コンボを狙える今の既定値に置き換える
+        if !SolverOptions.stepChoices.contains(s.maxSteps) { s.maxSteps = SolverOptions.defaultSteps }
         return s
     }
     static func saveSettings(_ s: AppSettings) {

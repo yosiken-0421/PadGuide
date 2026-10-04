@@ -40,6 +40,12 @@ public struct ResultMessage: Codable, Equatable, Sendable {
         self.elapsedMs = elapsedMs; self.achieved = achieved; self.source = source
     }
 
+    /// 盤面の色の数から決まるコンボ数の上限（保存・送信はしない計算値）
+    public var maxCombos: Int { Solver.theoreticalMaxCombos(cells.map { OrbKind(key: $0) ?? .unknown }) }
+
+    /// 盤面で組める最大コンボに届いたか
+    public var reachedMaxCombos: Bool { status == "ok" && combos >= maxCombos }
+
     /// 盤面とルートから作る
     public static func make(board: Board, confidence: [Double], route: Route?, goals: Goals,
                             status: String, source: String, now: Date = Date()) -> ResultMessage {

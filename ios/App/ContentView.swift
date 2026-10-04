@@ -133,6 +133,14 @@ struct ContentView: View {
                         VStack(alignment: .leading, spacing: 4) {
                             Text("見つかった候補：\(r.combos)コンボ・\(r.steps)手").font(.headline)
                                 .accessibilityIdentifier("routeSummary")
+                            if r.reachedMaxCombos {
+                                Text("この盤面の最大\(r.maxCombos)コンボに到達").font(.subheadline.bold()).foregroundStyle(.green)
+                                    .accessibilityIdentifier("maxComboStatus")
+                            } else {
+                                Text("この盤面の最大は\(r.maxCombos)コンボ（時間内に届くルートは見つかりませんでした）")
+                                    .font(.footnote).foregroundStyle(.orange)
+                                    .accessibilityIdentifier("maxComboStatus")
+                            }
                             if let s = RouteText.start(r) { Text("開始：\(s)") }
                             Text(RouteText.firstMoves(r)).font(.title2.bold())
                             if !r.achieved.isEmpty { Text("達成：" + r.achieved.joined(separator: "、")).font(.footnote) }
@@ -182,7 +190,7 @@ struct ContentView: View {
                 Text("5×4").tag("5x4")
             }
             .accessibilityIdentifier("sizePicker")
-            Picker("最大移動数", selection: $model.settings.maxSteps) {
+            Picker("手数の上限", selection: $model.settings.maxSteps) {
                 ForEach(SolverOptions.stepChoices, id: \.self) { Text("\($0)手").tag($0) }
             }
             Picker("探索時間", selection: $model.settings.timeLimit) {

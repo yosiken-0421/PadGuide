@@ -115,7 +115,7 @@
 
   function theoreticalMax(cells) {
     const cnt = new Array(10).fill(0);
-    for (const v of cells) if (v !== UNKNOWN) cnt[v]++;
+    for (const v of cells) if (v >= 0 && v !== UNKNOWN) cnt[v]++;
     return cnt.reduce((a, c) => a + Math.floor(c / 3), 0);
   }
 
@@ -144,103 +144,206 @@
     return true;
   }
 
-  function pairs(b, cols, rows) {
-    let p = 0;
-    for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
-      const v = b[r * cols + c];
-      if (v < 0 || v === UNKNOWN) continue;
-      if (c + 1 < cols && b[r * cols + c + 1] === v) p++;
-      if (r + 1 < rows && b[(r + 1) * cols + c] === v) p++;
+  /** 探索用の速い評価（メモリ確保なし）。結果は out に入る */
+  function makeQuickEval(cols, rows) {
+    const N = cols * rows;
+    const g = new Int8Array(N), mark = new Uint8Array(N), visited = new Uint8Array(N), inGroup = new Uint8Array(N);
+    const stack = new Int32Array(N), group = new Int32Array(N);
+    const out = { combos: 0, cleared: 0, clearedByKind: new Int32Array(10), combosByKind: new Int32Array(10), shapes: {} };
+    function run(src, off, wantShapes) {
+      for (let i = 0; i < N; i++) g[i] = src[off + i];
+      out.combos = 0; out.cleared = 0; out.clearedByKind.fill(0); out.combosByKind.fill(0);
+      if (wantShapes) out.shapes = {};
+      for (;;) {
+        mark.fill(0);
+        let any = false;
+        for (let r = 0; r < rows; r++) {
+          const base = r * cols;
+          for (let c = 0; c + 2 < cols; c++) {
+            const i = base + c, v = g[i];
+            if (v >= 0 && v !== UNKNOWN && g[i + 1] === v && g[i + 2] === v) { mark[i] = mark[i + 1] = mark[i + 2] = 1; any = true; }
+          }
+        }
+        for (let i = 0; i + 2 * cols < N; i++) {
+          const v = g[i];
+          if (v >= 0 && v !== UNKNOWN && g[i + cols] === v && g[i + 2 * cols] === v) { mark[i] = mark[i + cols] = mark[i + 2 * cols] = 1; any = true; }
+        }
+        if (!any) break;
+        visited.fill(0);
+        for (let i = 0; i < N; i++) {
+          if (!mark[i] || visited[i]) continue;
+          const color = g[i];
+          let sp = 0, n = 0;
+          stack[sp++] = i; visited[i] = 1;
+          while (sp) {
+            const p = stack[--sp];
+            group[n++] = p;
+            const pc = p % cols;
+            let q = p - cols;
+            if (q >= 0 && mark[q] && !visited[q] && g[q] === color) { visited[q] = 1; stack[sp++] = q; }
+            q = p + cols;
+            if (q < N && mark[q] && !visited[q] && g[q] === color) { visited[q] = 1; stack[sp++] = q; }
+            if (pc > 0) { q = p - 1; if (mark[q] && !visited[q] && g[q] === color) { visited[q] = 1; stack[sp++] = q; } }
+            if (pc < cols - 1) { q = p + 1; if (mark[q] && !visited[q] && g[q] === color) { visited[q] = 1; stack[sp++] = q; } }
+          }
+          out.combos++; out.cleared += n;
+          out.combosByKind[color]++; out.clearedByKind[color] += n;
+          if (wantShapes) detectShapes(Array.from(group.subarray(0, n)), cols, rows, inGroup, out.shapes);
+        }
+        for (let i = 0; i < N; i++) if (mark[i]) g[i] = -1;
+        for (let c = 0; c < cols; c++) {
+          let w = N - cols + c;
+          for (let i = w; i >= 0; i -= cols) { const v = g[i]; if (v !== -1) { g[w] = v; w -= cols; } }
+          while (w >= 0) { g[w] = -1; w -= cols; }
+        }
+      }
+      out.fiveColors = out.combosByKind[0] > 0 && out.combosByKind[1] > 0 && out.combosByKind[2] > 0 &&
+        out.combosByKind[3] > 0 && out.combosByKind[4] > 0;
+      return out;
     }
-    return p;
+    return run;
+  }
+
+  /** 最大コンボに向けた揃いやすさ（iPhone 側の Solver.potential と同じ） */
+  function potential(b, off, cols, rows, e) {
+    let pairs = 0, near = 0;
+    for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+      const i = off + r * cols + c, v = b[i];
+      if (v < 0 || v === UNKNOWN) continue;
+      if (c + 1 < cols && b[i + 1] === v) pairs++;
+      if (r + 1 < rows && b[i + cols] === v) pairs++;
+      if (c + 2 < cols && b[i + 2] === v && b[i + 1] !== v) near++;
+      if (r + 2 < rows && b[i + 2 * cols] === v && b[i + cols] !== v) near++;
+    }
+    let waste = 0;
+    for (let k = 0; k < 10; k++) if (e.combosByKind[k] > 0) waste += e.clearedByKind[k] - 3 * e.combosByKind[k];
+    return pairs * 30 + near * 15 - waste * 100;
+  }
+
+  /** 探索幅 width のビームサーチを1回（iPhone 側の Solver.beamRun と同じ手順） */
+  function beamRun(cells, cols, rows, width, maxSteps, goals, maxCombos, run, deadline, opts, now) {
+    const N = cols * rows;
+    const wantShapes = shapeGoals(goals).length > 0;
+    const nbr = new Int32Array(N * 4);
+    for (let p = 0; p < N; p++) for (let di = 0; di < 4; di++) nbr[p * 4 + di] = neighbor(p, DIRS[di], cols, rows);
+    const beamCap = Math.max(width, N), candCap = beamCap * 4;
+    let beamBoards = new Int8Array(beamCap * N);
+    const candBoards = new Int8Array(candCap * N);
+    let beamPos = [], beamPrev = [], beamDir = [], beamTurns = [];
+    for (let p = 0; p < N; p++) {
+      beamBoards.set(cells, p * N);
+      beamPos.push(p); beamPrev.push(-1); beamDir.push(-1); beamTurns.push(0);
+    }
+    const layerParent = [new Array(N).fill(-1)], layerPos = [[...Array(N).keys()]];
+    const res = { path: [], score: -Infinity, steps: 0, turns: 0, met: false, stopped: false, expanded: 0 };
+    let bestDepth = -1, bestParent = -1, bestLast = 0;
+    const seen = new Set();
+    outer:
+    for (let depth = 1; depth <= maxSteps; depth++) {
+      const candParent = [], candPos = [], candDir = [], candTurns = [], candHeur = [];
+      seen.clear();
+      for (let i = 0; i < beamPos.length; i++) {
+        const pos = beamPos[i], so = i * N;
+        for (let di = 0; di < 4; di++) {
+          const np = nbr[pos * 4 + di];
+          if (np < 0 || np === beamPrev[i]) continue;
+          const off = candPos.length * N;
+          for (let k = 0; k < N; k++) candBoards[off + k] = beamBoards[so + k];
+          const t = candBoards[off + pos]; candBoards[off + pos] = candBoards[off + np]; candBoards[off + np] = t;
+          let h1 = 2166136261, h2 = 5381;
+          for (let k = 0; k < N; k++) { const v = candBoards[off + k] + 1; h1 = Math.imul(h1 ^ v, 16777619); h2 = (Math.imul(h2, 33) + v) | 0; }
+          h1 = Math.imul(h1 ^ np, 16777619);
+          const key = (h1 >>> 0) * 2097152 + ((h2 >>> 0) & 2097151);
+          if (seen.has(key)) continue;
+          seen.add(key);
+          res.expanded++;
+          const e = run(candBoards, off, wantShapes);
+          const score = goalScore(e, goals);
+          const turns = beamTurns[i] + (beamDir[i] >= 0 && beamDir[i] !== di ? 1 : 0);
+          const heur = score - e.cleared * 10 + potential(candBoards, off, cols, rows, e) - turns;
+          candParent.push(i); candPos.push(np); candDir.push(di); candTurns.push(turns); candHeur.push(heur);
+          if (score > res.score || (score === res.score && (depth < res.steps || (depth === res.steps && turns < res.turns)))) {
+            bestDepth = depth - 1; bestParent = i; bestLast = np;
+            res.score = score; res.steps = depth; res.turns = turns;
+            res.met = allGoalsMet(e, goals, maxCombos);
+          }
+          if ((res.expanded & 255) === 0) {
+            if (opts.shouldStop && opts.shouldStop()) { res.stopped = true; break outer; }
+            if (deadline != null && now() > deadline) { res.stopped = true; break outer; }
+          }
+        }
+      }
+      if (!candPos.length || res.met) break;
+      const order = candPos.map((_, i) => i);
+      order.sort((a, b) => candHeur[a] !== candHeur[b] ? candHeur[b] - candHeur[a] : a - b);
+      const keep = Math.min(width, order.length);
+      const nb = new Int8Array(beamCap * N);
+      const np = [], npr = [], nd = [], nt = [], lp = [], lpos = [];
+      for (let j = 0; j < keep; j++) {
+        const idx = order[j];
+        nb.set(candBoards.subarray(idx * N, idx * N + N), j * N);
+        np.push(candPos[idx]); npr.push(beamPos[candParent[idx]]); nd.push(candDir[idx]); nt.push(candTurns[idx]);
+        lp.push(candParent[idx]); lpos.push(candPos[idx]);
+      }
+      beamBoards = nb; beamPos = np; beamPrev = npr; beamDir = nd; beamTurns = nt;
+      layerParent.push(lp); layerPos.push(lpos);
+      if (opts.shouldStop && opts.shouldStop()) { res.stopped = true; break; }
+      if (deadline != null && now() > deadline) { res.stopped = true; break; }
+    }
+    if (bestDepth >= 0) {
+      const path = [bestLast];
+      let d = bestDepth, i = bestParent;
+      while (d >= 0 && i >= 0) { path.push(layerPos[d][i]); i = layerParent[d][i]; d--; }
+      res.path = path.reverse();
+    }
+    return res;
   }
 
   /**
-   * ビームサーチ。opts: { maxSteps, timeLimitMs (null で無制限), beamWidth, goals, shouldStop, now }
+   * ビームサーチ。opts: { maxSteps, timeLimitMs (null で無制限), beamWidth, maxBeamWidth, goals, shouldStop, now }
+   * 盤面の色の数から決まる最大コンボ数に届くまで探す（時間内に届かなければ探索幅を広げて探し直す）。
    * 結果は「見つかった候補」（最大を保証しない）
    */
   function solve(cells, cols, rows, opts) {
     opts = opts || {};
     const now = opts.now || (() => Date.now());
-    const N = cols * rows;
     const t0 = now();
     const deadline = opts.timeLimitMs == null ? null : t0 + opts.timeLimitMs;
-    const maxSteps = Math.max(1, opts.maxSteps || 20);
-    const beamWidth = Math.max(1, opts.beamWidth || 1200);
+    const maxSteps = Math.max(1, opts.maxSteps || 48);
+    const maxBeamWidth = opts.maxBeamWidth || 12000;
     const goals = opts.goals || {};
     const maxCombos = theoreticalMax(cells);
     const ev0 = evaluate(cells, cols, rows);
-
-    let beamBoards = [], beamPos = [], beamPrev = [], beamDir = [], beamTurns = [];
-    const layerParent = [], layerPos = [];
-    for (let p = 0; p < N; p++) { beamBoards.push(Int8Array.from(cells)); beamPos.push(p); beamPrev.push(-1); beamDir.push(-1); beamTurns.push(0); }
-    layerParent.push(new Array(N).fill(-1));
-    layerPos.push([...Array(N).keys()]);
-
-    let bestDepth = -1, bestParent = -1, bestLast = 0, bestRes = ev0, bestScore = goalScore(ev0, goals), bestSteps = 0, bestTurns = 0;
-    let stopped = false, expanded = 0;
-    const better = (score, steps, turns) => score !== bestScore ? score > bestScore : steps !== bestSteps ? steps < bestSteps : turns < bestTurns;
-
-    outer:
-    for (let depth = 1; depth <= maxSteps; depth++) {
-      const cand = [];
-      const seen = new Set();
-      for (let i = 0; i < beamPos.length; i++) {
-        const pos = beamPos[i];
-        for (let di = 0; di < 4; di++) {
-          const np = neighbor(pos, DIRS[di], cols, rows);
-          if (np < 0 || np === beamPrev[i]) continue;
-          const w = beamBoards[i].slice();
-          const t = w[pos]; w[pos] = w[np]; w[np] = t;
-          const key = w.join(',') + '|' + np;
-          if (seen.has(key)) continue;
-          seen.add(key);
-          expanded++;
-          const ev = evaluate(w, cols, rows);
-          const score = goalScore(ev, goals);
-          const turns = beamTurns[i] + (beamDir[i] >= 0 && beamDir[i] !== di ? 1 : 0);
-          const heur = score + pairs(w, cols, rows) * 40 - depth * 2 - turns;
-          cand.push({ w, parent: i, np, di, turns, heur, idx: cand.length });
-          if (better(score, depth, turns)) {
-            bestDepth = depth - 1; bestParent = i; bestLast = np;
-            bestRes = ev; bestScore = score; bestSteps = depth; bestTurns = turns;
-          }
-          if ((expanded & 255) === 0) {
-            if (opts.shouldStop && opts.shouldStop()) { stopped = true; break outer; }
-            if (deadline != null && now() > deadline) { stopped = true; break outer; }
-          }
-        }
-      }
-      if (!cand.length) break;
-      if (allGoalsMet(bestRes, goals, maxCombos) && bestSteps < depth) break;
-      cand.sort((a, b) => a.heur !== b.heur ? b.heur - a.heur : a.idx - b.idx);
-      const keep = cand.slice(0, beamWidth);
-      const prevPos = beamPos;
-      beamBoards = keep.map(c => c.w);
-      beamPos = keep.map(c => c.np);
-      beamPrev = keep.map(c => prevPos[c.parent]);
-      beamDir = keep.map(c => c.di);
-      beamTurns = keep.map(c => c.turns);
-      layerParent.push(keep.map(c => c.parent));
-      layerPos.push(keep.map(c => c.np));
-      if (deadline != null && now() > deadline) { stopped = true; break; }
+    const run = makeQuickEval(cols, rows);
+    let best = { path: [0], score: goalScore(ev0, goals), steps: 0, turns: 0, met: allGoalsMet(ev0, goals, maxCombos) };
+    const better = (a, b) => a.score !== b.score ? a.score > b.score : a.steps !== b.steps ? a.steps < b.steps : a.turns < b.turns;
+    let width = Math.max(1, opts.beamWidth || 800), stopped = false, expanded = 0;
+    for (;;) {
+      const runStart = now();
+      const r = beamRun(cells, cols, rows, width, maxSteps, goals, maxCombos, run, deadline, opts, now);
+      expanded += r.expanded;
+      if (r.path.length >= 2 && better(r, best)) best = r;
+      if (r.stopped) { stopped = true; break; }
+      if (best.met || deadline == null) break;
+      const t = now(), rate = r.expanded / Math.max(t - runStart, 0.1), remaining = deadline - t;
+      if (remaining <= 0) { stopped = true; break; }
+      const next = Math.floor(Math.min(rate * remaining * 0.85 / (2.6 * maxSteps), maxBeamWidth));
+      if (next < Math.floor(width * 13 / 10)) break;
+      width = next;
     }
-
-    let path = [];
-    if (bestDepth >= 0) {
-      path.push(bestLast);
-      let d = bestDepth, i = bestParent;
-      while (d >= 0 && i >= 0) { path.push(layerPos[d][i]); i = layerParent[d][i]; d--; }
-      path.reverse();
-    } else path = [0];
+    const path = best.path;
+    const b = Array.from(cells);
+    for (let k = 1; k < path.length; k++) { const t = b[path[k - 1]]; b[path[k - 1]] = b[path[k]]; b[path[k]] = t; }
+    const result = path.length >= 2 ? evaluate(b, cols, rows) : ev0;
     const moves = [];
     for (let k = 1; k < path.length; k++) {
-      const a = path[k - 1], b = path[k];
-      const dr = Math.floor(b / cols) - Math.floor(a / cols), dc = (b % cols) - (a % cols);
+      const a = path[k - 1], c = path[k];
+      const dr = Math.floor(c / cols) - Math.floor(a / cols), dc = (c % cols) - (a % cols);
       moves.push(dr === -1 ? 'U' : dr === 1 ? 'D' : dc === -1 ? 'L' : 'R');
     }
-    return { start: path[0], end: path[path.length - 1], path, moves, result: bestRes, score: bestScore,
-      turns: bestTurns, elapsedMs: now() - t0, stoppedEarly: stopped, expanded };
+    return { start: path[0], end: path[path.length - 1], path, moves, result, score: goalScore(result, goals),
+      turns: best.turns, elapsedMs: now() - t0, stoppedEarly: stopped, expanded,
+      maxCombos, reachedMax: result.combos >= maxCombos };
   }
 
   /** 矢印座標（iPhone 側と同じずらし方） */

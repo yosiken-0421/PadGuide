@@ -110,7 +110,7 @@
     if (st.worker) st.worker.terminate();   // 前の探索はキャンセル
     st.worker = new Worker('worker.js');
     const id = ++st.jobId;
-    const opts = { maxSteps: Number($('optSteps').value), timeLimitMs: Number($('optTime').value), beamWidth: 2500, goals: goals() };
+    const opts = { maxSteps: Number($('optSteps').value), timeLimitMs: Number($('optTime').value), beamWidth: 800, maxBeamWidth: 12000, goals: goals() };
     $('solveBtn').disabled = true;
     $('solveBtn').textContent = '探索中…';
     st.worker.onmessage = (e) => {
@@ -285,7 +285,9 @@
 
   function renderStats() {
     const rt = st.route, b = st.board;
-    $('statCombo').textContent = rt ? rt.combos : '—';
+    const maxC = b ? S.theoreticalMax(b.cells) : 0;
+    $('statCombo').textContent = rt ? (rt.combos >= maxC ? rt.combos + '（最大）' : rt.combos + ' / 最大' + maxC) : '—';
+    $('statCombo').title = b ? 'この盤面の色の数から決まる最大コンボ数: ' + maxC : '';
     $('statSteps').textContent = rt ? rt.moves.length + ' 手' : '—';
     $('statTime').textContent = rt ? (rt.elapsedMs / 1000).toFixed(1) + ' 秒' : '—';
     if (b) {

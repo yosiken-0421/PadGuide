@@ -194,7 +194,8 @@ final class PiPGuide: NSObject, ObservableObject {
                     } else if p > 0 {
                         title = "\(p)/\(n)手　あと\(n - p)手（\(r.combos)コンボ）"
                     } else if let s = RouteText.start(r) {
-                        title = "\(r.combos)コンボ・\(n)手　START：\(s)"
+                        let maxMark = r.reachedMaxCombos ? "(最大)" : "/" + String(r.maxCombos)
+                        title = "\(r.combos)\(maxMark)コンボ・\(n)手　START：\(s)"
                     }
                 } else {
                     title = RouteText.status(r.status)
