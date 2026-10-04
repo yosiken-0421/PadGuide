@@ -77,7 +77,8 @@ struct SyntheticScreen: PixelSource {
 
     /// 光沢のある球のようなドロップ（独自デザイン）：中心が明るく縁が暗い、左上に白いハイライト、細かいノイズ
     mutating func drawShinyBoard(_ board: Board, x: Double, y: Double, cell: Double,
-                                 hueShift: Double = 0, valueScale: Double = 1, seed: UInt64 = 1, enhanced: Bool = false) {
+                                 hueShift: Double = 0, valueScale: Double = 1, seed: UInt64 = 1, enhanced: Bool = false,
+                                 jammerColor: RGB? = nil, jammerPattern: Bool = false) {
         var rng = seed
         func noise() -> Double {
             rng = rng &* 6364136223846793005 &+ 1442695040888963407
@@ -89,7 +90,9 @@ struct SyntheticScreen: PixelSource {
                 let checker = (r + c) % 2 == 0 ? RGB(58, 44, 40) : RGB(72, 54, 46)
                 let x0 = Int(x + Double(c) * cell), y0 = Int(y + Double(r) * cell)
                 fillRect(x: x0, y: y0, w: Int(cell) + 1, h: Int(cell) + 1, checker)
-                guard let base0 = Self.palette[board[r, c]] else { continue }
+                let kind = board[r, c]
+                guard let pal = Self.palette[kind] else { continue }
+                let base0 = kind == .jammer ? (jammerColor ?? pal) : pal
                 let base = Self.adjust(base0, hueShift: hueShift, valueScale: valueScale)
                 let (bh, bs, bv) = base.hsv
                 let cx = x + (Double(c) + 0.5) * cell, cy = y + (Double(r) + 0.5) * cell
@@ -116,6 +119,19 @@ struct SyntheticScreen: PixelSource {
                     let mx = Int(cx + cell * 0.22), my = Int(cy + cell * 0.22), t = Int(cell * 0.04)
                     fillRect(x: mx - t * 3, y: my - t / 2, w: t * 6, h: t, RGB(255, 255, 255))
                     fillRect(x: mx - t / 2, y: my - t * 3, w: t, h: t * 6, RGB(255, 255, 255))
+                }
+                if kind == .jammer && jammerPattern {
+                    // 暗い「×」の模様（独自デザイン）
+                    let t = cell * 0.05, half = rad * 0.7
+                    for yy in Int(cy - half)..<Int(cy + half) {
+                        for xx in Int(cx - half)..<Int(cx + half) {
+                            let dx = Double(xx) + 0.5 - cx, dy = Double(yy) + 0.5 - cy
+                            if abs(dx - dy) < t || abs(dx + dy) < t {
+                                let i = (yy * width + xx) * 3
+                                buf[i] = 50; buf[i + 1] = 55; buf[i + 2] = 65
+                            }
+                        }
+                    }
                 }
             }
         }

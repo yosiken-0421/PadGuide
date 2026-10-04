@@ -156,6 +156,8 @@ public enum BoardReader {
         var hue: Double?          // 鮮やかな画素の平均色相（なければ nil）
         var colorfulRatio: Double // 鮮やかな画素の割合
         var greyBrightRatio: Double
+        /// 彩度の低い（灰色〜青みがかった灰色）画素の割合。暗い縁や模様は除く
+        var greyRatio: Double
         var meanV: Double
         var meanS: Double
         var hueSpread: Double     // 色相のばらつき（0=そろっている〜1）
@@ -173,7 +175,7 @@ public enum BoardReader {
     static func feature(_ src: PixelSource, cx: Double, cy: Double, cell: Double) -> CellFeature {
         let patch = max(1, Int(cell * 0.02))
         var sx = 0.0, sy = 0.0, wsum = 0.0
-        var colorful = 0, greyBright = 0, total = 0
+        var colorful = 0, greyBright = 0, grey = 0, total = 0
         var vs = 0.0, ss = 0.0
         var cr = 0, cg = 0, cb = 0, cn = 0
         let rings: [(Double, Int)] = [(0.0, 1), (0.1, 6), (0.19, 8), (0.28, 10), (0.35, 12)]
@@ -196,6 +198,7 @@ public enum BoardReader {
                 } else if sat < 0.24 && v > 0.55 {
                     greyBright += 1
                 }
+                if sat < 0.30 && v >= 0.30 { grey += 1 }
             }
         }
         var hue: Double?
@@ -209,6 +212,7 @@ public enum BoardReader {
         let color = cn > 0 ? RGB(UInt8(cr / cn), UInt8(cg / cn), UInt8(cb / cn)) : average(src, Int(cx), Int(cy), patch)
         return CellFeature(hue: hue, colorfulRatio: Double(colorful) / Double(total),
                            greyBrightRatio: Double(greyBright) / Double(total),
+                           greyRatio: Double(grey) / Double(total),
                            meanV: colorful > 0 ? vs / Double(colorful) : color.hsv.v,
                            meanS: colorful > 0 ? ss / Double(colorful) : color.hsv.s,
                            hueSpread: spread, color: color)
@@ -259,6 +263,11 @@ public enum BoardReader {
             }
         }
 
+        // その盤面での色ドロップの典型的な彩度（お邪魔のくすんだ色と見分けるため）
+        let vivid = feats.filter { $0.hue != nil && $0.colorfulRatio >= 0.45 }.map { $0.meanS }.sorted()
+        let typicalS = vivid.count >= 6 ? vivid[vivid.count / 2] : 0.7
+        let dullLimit = min(0.45, typicalS * 0.62)
+
         var cells: [CellReading] = []
         cells.reserveCapacity(size.count)
         var vSum = 0.0
@@ -288,9 +297,16 @@ public enum BoardReader {
                 // 手動で直すとその色を覚える）。通常の闇ドロップは鮮やかで明るい
                 if kind == .dark && f.meanV < 0.42 { kind = .mortalPoison; conf = min(conf, 0.55) }
                 else if kind == .dark && f.meanS < 0.42 { kind = .poison; conf = min(conf, 0.55) }
-            } else if f.greyBrightRatio >= 0.5 {
+                // お邪魔ドロップ：青みがかった灰色。鮮やかな画素があっても彩度がとても低ければ色ドロップではない
+                // （水・木などの色ドロップは鮮やか。紫系のくすんだ色は毒として上で扱う）
+                else if isDullJammer(f, dullLimit: dullLimit) {
+                    kind = .jammer
+                    conf = min(0.9, 0.6 + f.greyRatio * 0.3 + max(0, dullLimit - f.meanS))
+                }
+            } else if f.greyRatio >= 0.4 || f.greyBrightRatio >= 0.5 {
+                // 灰色が多い：お邪魔（明るさによらない。陰影や暗い模様があっても読めるように）
                 kind = .jammer
-                conf = min(1, 0.4 + f.greyBrightRatio * 0.5)
+                conf = min(0.95, 0.45 + max(f.greyRatio, f.greyBrightRatio) * 0.5)
             } else {
                 kind = .unknown
                 conf = 0.2
@@ -299,6 +315,14 @@ public enum BoardReader {
             cells.append(CellReading(kind: kind, confidence: (conf * 100).rounded() / 100, color: f.color))
         }
         return BoardReading(rect: rect, cells: cells, brightness: vSum / Double(max(1, size.count)))
+    }
+
+    /// 彩度の低い色のマスをお邪魔と判断するか（紫系＝毒・猛毒は除く）
+    static func isDullJammer(_ f: CellFeature, dullLimit: Double) -> Bool {
+        guard let h = f.hue, !(255..<300).contains(h) else { return false }
+        if f.meanS < 0.36 { return true }
+        // 青〜緑がかった灰色（お邪魔によくある色味）は、盤面の色ドロップより明らかにくすんでいればお邪魔
+        return (150..<260).contains(h) && f.meanS < dullLimit
     }
 
     static func average(_ src: PixelSource, _ cx: Int, _ cy: Int, _ r: Int) -> RGB {

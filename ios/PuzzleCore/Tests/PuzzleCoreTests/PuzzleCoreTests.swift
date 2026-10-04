@@ -123,6 +123,51 @@ final class RecognitionTests: XCTestCase {
         }
     }
 
+    /// 青みがかった灰色・陰影・暗い模様のあるお邪魔も、水や不明と間違えずに読める（水ドロップと隣り合っていても）
+    func testDullJammerRecognized() {
+        let board = Board(size: S65, string: """
+            RBGLDH
+            JBJRBG
+            LDHJBG
+            LJHRJG
+            RBGLDH
+            """)
+        let cases: [(RGB, Double, Double)] = [
+            (RGB(118, 128, 148), 1, 0), (RGB(100, 120, 148), 1, 0), (RGB(140, 145, 155), 0.8, 0),
+            (RGB(118, 128, 148), 0.85, 10), (RGB(118, 128, 148), 0.85, -10), (RGB(185, 190, 200), 1, 0),
+        ]
+        for (jam, scale, shift) in cases {
+            var sc = SyntheticScreen()
+            let cell = Double(sc.width) / 6
+            let y = Double(sc.height) - cell * 5 - 110
+            sc.drawShinyBoard(board, x: 0, y: y, cell: cell, hueShift: shift, valueScale: scale,
+                              jammerColor: jam, jammerPattern: true)
+            let rd = BoardReader.read(sc, rect: BoardRect(x: 0, y: y, cell: cell, size: S65), classifier: ColorClassifier())
+            XCTAssertEqual(rd.board, board, "お邪魔 \(jam) 明るさ \(scale) 色相 \(shift)")
+            XCTAssertTrue(rd.isUsable)
+        }
+    }
+
+    /// 光沢のある毒・猛毒・お邪魔が混ざっていても読める
+    func testShinyJammerAndPoison() {
+        let board = Board(size: S65, string: """
+            RBGLDH
+            JPMRBG
+            LDHRBG
+            LDHJPM
+            RBGLDH
+            """)
+        for scale in [1.0, 0.85] {
+            var sc = SyntheticScreen()
+            let cell = Double(sc.width) / 6
+            let y = Double(sc.height) - cell * 5 - 110
+            sc.drawShinyBoard(board, x: 0, y: y, cell: cell, valueScale: scale,
+                              jammerColor: RGB(118, 128, 148), jammerPattern: true)
+            let rd = BoardReader.read(sc, rect: BoardRect(x: 0, y: y, cell: cell, size: S65), classifier: ColorClassifier())
+            XCTAssertEqual(rd.board, board, "明るさ \(scale)")
+        }
+    }
+
     /// 読めた盤面の信頼度は高く、黄色枠（自信がないマス）が出ない
     func testConfidenceIsHighForClearOrbs() {
         let board = SyntheticScreen.randomBoard(S65, seed: 140)
