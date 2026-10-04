@@ -27,11 +27,14 @@ public struct RouteTracker: Sendable {
         boards = list
     }
 
-    /// 同じ一致度のとき：同じ色どうしを入れ替えた手は前後の盤面が同じになるので、
-    /// 今の位置より先なら、より先の手を選ぶ（操作は前へ進むため）。そうでなければ今の位置に近いほう
+    /// 同じ一致度のとき（同じ色どうしを入れ替えた手は前後の盤面が同じになり、区別できない）：
+    /// 先へ進みすぎて手順を飛ばさないよう、今の位置以降でいちばん手前の手を選ぶ。
+    /// 盤面が変われば次の更新で追いつく。今の位置以降の候補がなければ、今の位置に近いほう。
     static func prefer(_ k: Int, over best: Int, progress: Int) -> Bool {
         if best < 0 { return true }
-        if k >= progress && best >= progress { return k > best }
+        let kAhead = k >= progress, bAhead = best >= progress
+        if kAhead && bAhead { return k < best }
+        if kAhead != bAhead { return kAhead }
         return abs(k - progress) < abs(best - progress)
     }
 

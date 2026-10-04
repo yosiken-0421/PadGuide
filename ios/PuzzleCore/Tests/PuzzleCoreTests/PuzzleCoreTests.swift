@@ -563,17 +563,34 @@ final class PiPStateTests: XCTestCase {
 
 final class RouteTrackerTests: XCTestCase {
 
+    /// ルートの各手順の後の盤面
+    private func boards(_ board: Board, _ path: [Int]) -> [[OrbKind]] {
+        var b = board.cells, out = [b]
+        for k in 1..<path.count { b.swapAt(path[k - 1], path[k]); out.append(b) }
+        return out
+    }
+
     func testTracksProgressAlongRoute() {
-        let board = SyntheticScreen.randomBoard(S65, seed: 201)
-        let route = Solver.solve(board, options: SolverOptions(maxSteps: 20, timeLimit: nil, beamWidth: 200))
-        guard var t = RouteTracker(board: board, path: route.path) else { return XCTFail("追跡を作れない") }
-        XCTAssertEqual(t.progress, 0)
-        var cur = board
-        for k in 1...route.steps {
-            cur.cells.swapAt(route.path[k - 1], route.path[k])
-            t.update(cur.cells)
-            XCTAssertEqual(t.progress, k, "\(k) 手目まで進んだと分かる")
-            XCTAssertFalse(t.offRoute)
+        for seed: UInt64 in [201, 205, 206] {
+            let board = SyntheticScreen.randomBoard(S65, seed: seed)
+            let route = Solver.solve(board, options: SolverOptions(maxSteps: 20, timeLimit: nil, beamWidth: 200))
+            guard var t = RouteTracker(board: board, path: route.path) else { return XCTFail("追跡を作れない") }
+            let bs = boards(board, route.path)
+            XCTAssertEqual(t.progress, 0)
+            var cur = board
+            var last = 0
+            for k in 1...route.steps {
+                cur.cells.swapAt(route.path[k - 1], route.path[k])
+                t.update(cur.cells)
+                // 盤面から区別できる範囲で正しく、手順を飛ばさない（同じ盤面が続くときは手前の手）
+                let same = bs.indices.filter { bs[$0] == cur.cells && $0 >= last }
+                XCTAssertEqual(t.progress, same.first, "\(k) 手目：盤面に一致するいちばん手前の手")
+                XCTAssertLessThanOrEqual(t.progress, k, "先へ進みすぎない")
+                XCTAssertGreaterThanOrEqual(t.progress, last, "戻らない")
+                if bs[k] != bs[k - 1] { XCTAssertEqual(t.progress, k, "盤面が変わった手は正確に分かる") }
+                XCTAssertFalse(t.offRoute)
+                last = t.progress
+            }
         }
     }
 
@@ -581,11 +598,13 @@ final class RouteTrackerTests: XCTestCase {
         let board = SyntheticScreen.randomBoard(S65, seed: 202)
         let route = Solver.solve(board, options: SolverOptions(maxSteps: 20, timeLimit: nil, beamWidth: 200))
         var t = RouteTracker(board: board, path: route.path)!
+        let bs = boards(board, route.path)
         var cur = BoardOps.apply(start: route.start, moves: Array(route.moves.prefix(4)), to: board)!
         cur.cells[route.path[4]] = .unknown          // 指で持っているドロップが読めない
         t.update(cur.cells)
-        XCTAssertEqual(t.progress, 4)
-        XCTAssertFalse(t.offRoute)
+        XCTAssertFalse(t.offRoute, "1マス読めなくてもルート上にいると分かる")
+        XCTAssertTrue((1...4).contains(t.progress), "進み具合が分かる: \(t.progress)")
+        XCTAssertLessThanOrEqual(RouteTracker.mismatch(bs[t.progress], cur.cells), 1)
     }
 
     func testDetectsLeavingRoute() {
