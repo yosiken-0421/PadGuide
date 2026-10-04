@@ -109,8 +109,21 @@ enum RouteDrawing {
         g.strokeEllipse(in: CGRect(x: hp.x - cell * 0.46, y: hp.y - cell * 0.46, width: cell * 0.92, height: cell * 0.92))
         let tag = next == 0 ? "START" : "いま"
         let tagSize = max(10, cell * 0.17)
-        let ty = hp.y - cell * 0.5 < origin.y + tagSize ? hp.y + cell * 0.52 : hp.y - cell * 0.62
-        pill(tag, at: CGPoint(x: hp.x, y: ty), size: tagSize, bg: ringColor)
+        // 次に動かす方向と反対側にラベルを置く（線や番号に隠れないように）
+        let (s1, s2) = seg(next)
+        let dx = s2.x - s1.x, dy = s2.y - s1.y
+        var tagPos: CGPoint
+        if abs(dy) >= abs(dx) {
+            tagPos = CGPoint(x: hp.x, y: dy < 0 ? hp.y + cell * 0.6 : hp.y - cell * 0.6)
+        } else {
+            tagPos = CGPoint(x: dx < 0 ? hp.x + cell * 0.62 : hp.x - cell * 0.62, y: hp.y - cell * 0.36)
+        }
+        // 盤面の外にはみ出すときは反対側へ
+        let minY = origin.y + tagSize * 0.7, maxY = origin.y + cell * CGFloat(r.rows) - tagSize * 0.7
+        if tagPos.y < minY { tagPos.y = hp.y + cell * 0.6 }
+        if tagPos.y > maxY { tagPos.y = hp.y - cell * 0.6 }
+        tagPos.x = min(max(tagPos.x, origin.x + cell * 0.4), origin.x + cell * CGFloat(cols) - cell * 0.4)
+        pill(tag, at: tagPos, size: tagSize, bg: ringColor)
         }
 
         // 手順番号（終わった手には付けない。重ならない位置を探す）
