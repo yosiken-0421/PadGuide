@@ -47,6 +47,10 @@ struct LatestState: Codable {
     var seq: Int
     var reading: BoardReading?
     var result: ResultMessage
+    /// ルートのうち何手目まで操作が進んだか（画面から推定。nil = 不明）
+    var progress: Int?
+    /// 操作がルートから外れた
+    var offRoute: Bool?
 }
 
 enum SharedStore {

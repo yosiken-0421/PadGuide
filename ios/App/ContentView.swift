@@ -45,7 +45,9 @@ struct ContentView: View {
             // 小窓の表示レイヤーは常に画面に置いておく（画面に入っていないと小窓を開始できない）
             .safeAreaInset(edge: .bottom, spacing: 0) { PiPBar(pip: pip) }
             .onAppear {
-                pip.prepare(autoStart: !model.isUITest) { [weak m = model] in (m?.board, m?.result) }
+                pip.prepare(autoStart: !model.isUITest) { [weak m = model] in
+                    PiPContent(board: m?.board, result: m?.result, progress: m?.progress, offRoute: m?.offRoute ?? false)
+                }
             }
             .sheet(isPresented: $showQR) { QRScannerSheet().environmentObject(model) }
             .sheet(isPresented: $showDiscovery) { DiscoverySheet().environmentObject(model) }
@@ -121,7 +123,7 @@ struct ContentView: View {
     @ViewBuilder private var boardSection: some View {
         Section {
             if let b = model.board {
-                BoardView(board: b, confidence: model.confidence, result: model.result) { i in
+                BoardView(board: b, confidence: model.confidence, result: model.result, progress: model.progress) { i in
                     editingCell = i
                     showPicker = true
                 }

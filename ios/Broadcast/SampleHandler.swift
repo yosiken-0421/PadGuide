@@ -22,6 +22,10 @@ final class SampleHandler: RPBroadcastSampleHandler {
     private var rect: BoardRect?
     private var badFrames = 0
     private var lastGoodFrame = 0.0
+    // 表示中のルートと、操作の進み具合
+    private var tracker: RouteTracker?
+    private var shownResult: ResultMessage?
+    private var shownReading: BoardReading?
     private var hasResult = false
     private var seq = 0
     private var cancelFlag: CancellationFlag?
@@ -39,6 +43,7 @@ final class SampleHandler: RPBroadcastSampleHandler {
     override func broadcastFinished() {
         cancelFlag?.cancel()
         session.end()                       // 保持しているデータを破棄
+        lock.lock(); tracker = nil; shownResult = nil; shownReading = nil; lock.unlock()
         SharedStore.clearLatest()
         SharedStore.clearHeartbeat()
         let done = DispatchSemaphore(value: 0)
@@ -91,6 +96,17 @@ final class SampleHandler: RPBroadcastSampleHandler {
         badFrames = 0
         lastGoodFrame = t
 
+        // ルート表示中：今の盤面からどこまで操作が進んだかを推定して知らせる
+        lock.lock()
+        var tr = tracker
+        let changed = tr?.update(reading.cells.map { $0.kind }) ?? false
+        if changed { tracker = tr }
+        let res = shownResult, rd = shownReading
+        lock.unlock()
+        if changed, let res, let tr {
+            publish(res, reading: rd, progress: tr.progress, offRoute: tr.offRoute, sendToPC: false)
+        }
+
         // 同じ盤面が続いて確定し、前回と違うときだけ再計算
         guard session.feed(reading) else {
             if !hasResult { reportStatus("unstable", t) }
@@ -113,7 +129,12 @@ final class SampleHandler: RPBroadcastSampleHandler {
             let msg = ResultMessage.make(board: board, confidence: reading.cells.map { $0.confidence }, route: route,
                                          goals: goals, status: route.result.combos > 0 ? "ok" : "nocombo", source: "iphone")
             self.session.store(result: msg)
-            self.publish(msg, reading: reading)
+            self.lock.lock()
+            self.tracker = msg.status == "ok" ? RouteTracker(board: board, path: msg.path) : nil
+            self.shownResult = msg
+            self.shownReading = reading
+            self.lock.unlock()
+            self.publish(msg, reading: reading, progress: msg.status == "ok" ? 0 : nil)
             self.hasResult = true
         }
     }
@@ -125,7 +146,10 @@ final class SampleHandler: RPBroadcastSampleHandler {
         if hasResult && t - lastGoodFrame < 10 { return }
         guard t - lastStatusSent > 1 else { return }
         lastStatusSent = t
-        if hasResult { hasResult = false }
+        if hasResult {
+            hasResult = false
+            lock.lock(); tracker = nil; shownResult = nil; shownReading = nil; lock.unlock()
+        }
         let size = rect?.size ?? .sixByFive
         let empty = Board(size: size, cells: Array(repeating: .unknown, count: size.count))
         let msg = ResultMessage.make(board: session.lastReading?.board ?? empty, confidence: [], route: nil,
@@ -133,10 +157,11 @@ final class SampleHandler: RPBroadcastSampleHandler {
         publish(msg, reading: session.lastReading)
     }
 
-    private func publish(_ msg: ResultMessage, reading: BoardReading?) {
+    private func publish(_ msg: ResultMessage, reading: BoardReading?, progress: Int? = nil, offRoute: Bool = false,
+                         sendToPC: Bool = true) {
         lock.lock(); seq += 1; let s = seq; lock.unlock()
-        SharedStore.writeLatest(LatestState(seq: s, reading: reading, result: msg))
-        PCLink.push(msg)
+        SharedStore.writeLatest(LatestState(seq: s, reading: reading, result: msg, progress: progress, offRoute: offRoute))
+        if sendToPC { PCLink.push(msg) }
     }
 }
 

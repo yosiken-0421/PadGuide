@@ -89,6 +89,48 @@ final class RecognitionTests: XCTestCase {
         XCTAssertNil(BoardDetector.detect(sc))
     }
 
+    private func shinyScreen(_ board: Board, hueShift: Double = 0, valueScale: Double = 1, enhanced: Bool = false, seed: UInt64 = 1) -> SyntheticScreen {
+        var sc = SyntheticScreen()
+        let cell = Double(sc.width) / Double(board.size.cols)
+        let y = Double(sc.height) - cell * Double(board.size.rows) - 110
+        sc.drawDecoyRow(y: Int(y) - 300, size: Int(cell * 0.85))
+        sc.drawShinyBoard(board, x: 0, y: y, cell: cell, hueShift: hueShift, valueScale: valueScale, seed: seed, enhanced: enhanced)
+        return sc
+    }
+
+    /// 光沢・陰影・ノイズのある球状のドロップでも正しく読める
+    func testShinyOrbs() {
+        for (i, size) in [S65, S76, BoardSize.fiveByFour].enumerated() {
+            let board = SyntheticScreen.randomBoard(size, seed: 100 + UInt64(i))
+            let rd = BoardDetector.detect(shinyScreen(board, seed: UInt64(i + 1)))
+            XCTAssertEqual(rd?.size, size, "\(size) と判定される")
+            XCTAssertEqual(rd?.board, board, "\(size) の盤面を正しく読む")
+        }
+    }
+
+    /// 強化マークがあっても、光沢のある球で基礎色を読める
+    func testShinyOrbsWithMarks() {
+        let board = SyntheticScreen.randomBoard(S65, seed: 120)
+        XCTAssertEqual(BoardDetector.detect(shinyScreen(board, enhanced: true))?.board, board)
+    }
+
+    /// 画面の色味が少しずれていても（色相のずれ・暗め）読める
+    func testColorShiftAndDimmer() {
+        let board = SyntheticScreen.randomBoard(S65, seed: 130)
+        for (shift, scale) in [(12.0, 1.0), (-12.0, 1.0), (0.0, 0.8), (10.0, 0.85), (-10.0, 0.85)] {
+            let rd = BoardDetector.detect(shinyScreen(board, hueShift: shift, valueScale: scale))
+            XCTAssertEqual(rd?.board, board, "色相 \(shift)°・明るさ \(scale) でも正しく読む")
+        }
+    }
+
+    /// 読めた盤面の信頼度は高く、黄色枠（自信がないマス）が出ない
+    func testConfidenceIsHighForClearOrbs() {
+        let board = SyntheticScreen.randomBoard(S65, seed: 140)
+        guard let rd = BoardDetector.detect(shinyScreen(board)) else { return XCTFail("盤面が見つからない") }
+        XCTAssertTrue(rd.lowConfidenceIndices.isEmpty, "自信がないマス: \(rd.lowConfidenceIndices)")
+        XCTAssertGreaterThan(rd.averageConfidence, 0.75)
+    }
+
     func testLearnedCorrection() {
         var cls = ColorClassifier()
         let odd = RGB(200, 120, 60)   // 橙色：本来は火と判定される
@@ -514,5 +556,55 @@ final class PiPStateTests: XCTestCase {
         t.startTimedOut()
         XCTAssertNil(t.lastError)
         XCTAssertTrue(t.active)
+    }
+}
+
+// MARK: - 操作の進み具合
+
+final class RouteTrackerTests: XCTestCase {
+
+    func testTracksProgressAlongRoute() {
+        let board = SyntheticScreen.randomBoard(S65, seed: 201)
+        let route = Solver.solve(board, options: SolverOptions(maxSteps: 20, timeLimit: nil, beamWidth: 200))
+        guard var t = RouteTracker(board: board, path: route.path) else { return XCTFail("追跡を作れない") }
+        XCTAssertEqual(t.progress, 0)
+        var cur = board
+        for k in 1...route.steps {
+            cur.cells.swapAt(route.path[k - 1], route.path[k])
+            t.update(cur.cells)
+            XCTAssertEqual(t.progress, k, "\(k) 手目まで進んだと分かる")
+            XCTAssertFalse(t.offRoute)
+        }
+    }
+
+    func testToleratesHeldOrbMisread() {
+        let board = SyntheticScreen.randomBoard(S65, seed: 202)
+        let route = Solver.solve(board, options: SolverOptions(maxSteps: 20, timeLimit: nil, beamWidth: 200))
+        var t = RouteTracker(board: board, path: route.path)!
+        var cur = BoardOps.apply(start: route.start, moves: Array(route.moves.prefix(4)), to: board)!
+        cur.cells[route.path[4]] = .unknown          // 指で持っているドロップが読めない
+        t.update(cur.cells)
+        XCTAssertEqual(t.progress, 4)
+        XCTAssertFalse(t.offRoute)
+    }
+
+    func testDetectsLeavingRoute() {
+        let board = SyntheticScreen.randomBoard(S65, seed: 203)
+        let route = Solver.solve(board, options: SolverOptions(maxSteps: 20, timeLimit: nil, beamWidth: 200))
+        var t = RouteTracker(board: board, path: route.path)!
+        let other = SyntheticScreen.randomBoard(S65, seed: 999)
+        t.update(other.cells)
+        XCTAssertFalse(t.offRoute, "1回だけなら読み違いかもしれないので、まだ外れたとしない")
+        t.update(other.cells)
+        XCTAssertTrue(t.offRoute, "続けて合わなければルートから外れた")
+        t.update(board.cells)
+        XCTAssertFalse(t.offRoute)
+        XCTAssertEqual(t.progress, 0)
+    }
+
+    func testRejectsInvalidPath() {
+        let board = SyntheticScreen.randomBoard(S65, seed: 204)
+        XCTAssertNil(RouteTracker(board: board, path: [0]))
+        XCTAssertNil(RouteTracker(board: board, path: [0, 99]))
     }
 }

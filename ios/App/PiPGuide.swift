@@ -31,11 +31,11 @@ final class PiPGuide: NSObject, ObservableObject {
     private var possibleObservation: NSKeyValueObservation?
     private var timer: Timer?
     private var timebase: CMTimebase?
-    private var provider: @MainActor () -> (Board?, ResultMessage?) = { (nil, nil) }
+    private var provider: @MainActor () -> PiPContent = { PiPContent() }
     private var lastKey = ""
     private var lastImage: CGImage?
     private var framesSent = 0
-    static let renderSize = CGSize(width: 600, height: 560)
+    static let renderSize = CGSize(width: 600, height: 650)
 
     override init() {
         let forced = ProcessInfo.processInfo.arguments.contains("-pipSimulateFailure")
@@ -53,7 +53,7 @@ final class PiPGuide: NSObject, ObservableObject {
     }
 
     /// 画面に表示されたら一度だけ呼ぶ
-    func prepare(autoStart: Bool, provider: @escaping @MainActor () -> (Board?, ResultMessage?)) {
+    func prepare(autoStart: Bool, provider: @escaping @MainActor () -> PiPContent) {
         self.provider = provider
         guard controller == nil else { return }
         // 小窓には「再生」用の音声設定が必要（音は鳴らさない。ゲームの音を止めないよう他の音と混ぜる設定）
@@ -61,7 +61,7 @@ final class PiPGuide: NSObject, ObservableObject {
         // ゲームへ切り替えたときの自動開始にも必要なので、最初から有効にしておく（他の音は止めない）
         try? AVAudioSession.sharedInstance().setActive(true)
         refresh(force: true)
-        timer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
+        timer = Timer.scheduledTimer(withTimeInterval: 0.15, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refresh(force: false) }
         }
         if simulateFailure {
@@ -119,20 +119,18 @@ final class PiPGuide: NSObject, ObservableObject {
     // MARK: フレームの作成と送信
 
     private func refresh(force: Bool) {
-        let (board, res) = provider()
-        let key = Self.contentKey(board: board, res: res)
-        let changed = force || key != lastKey || lastImage == nil
-        if changed {
+        let content = provider()
+        let animating = content.result?.status == "ok"
+        // ルート表示中は光る点を動かすため毎回描き直す（約7回/秒）。それ以外は内容が変わったときだけ
+        let key = content.key
+        if force || animating || key != lastKey || lastImage == nil {
             lastKey = key
-            lastImage = Self.render(board: board, res: res)
+            let phase: CGFloat? = animating ? CGFloat(Date().timeIntervalSince1970.truncatingRemainder(dividingBy: 1.6) / 1.6) : nil
+            lastImage = Self.render(content, phase: phase)
         }
         // 内容が同じでも送り続ける（小窓が黒くならないように）
         if let img = lastImage { enqueue(img) }
         framesSent += 1
-    }
-
-    private static func contentKey(board: Board?, res: ResultMessage?) -> String {
-        "\(board?.raw.map(String.init).joined() ?? "-")|\(res?.status ?? "-")|\(res?.path.map(String.init).joined(separator: ",") ?? "")"
     }
 
     private func enqueue(_ image: CGImage) {
@@ -168,101 +166,57 @@ final class PiPGuide: NSObject, ObservableObject {
 
     // MARK: 小窓に出す図（盤面・ルート・手順番号・つかむ位置）
 
-    static func render(board: Board?, res: ResultMessage?) -> CGImage? {
+    static func render(_ content: PiPContent, phase: CGFloat?) -> CGImage? {
         let size = renderSize
         let fmt = UIGraphicsImageRendererFormat()
         fmt.scale = 1
         fmt.opaque = true
         let img = UIGraphicsImageRenderer(size: size, format: fmt).image { rc in
             let g = rc.cgContext
-            UIColor(red: 0.15, green: 0.19, blue: 0.29, alpha: 1).setFill()
+            UIColor(red: 0.12, green: 0.15, blue: 0.24, alpha: 1).setFill()
             g.fill(CGRect(origin: .zero, size: size))
-            let header: CGFloat = 72
+            let board = content.board, res = content.result
+            let header: CGFloat = 150
+
+            // 1行目：状況
             var title = "画面共有を開始すると、ここにルートが出ます"
-            var sub = ""
+            var titleColor = UIColor.white
             if let r = res {
                 if r.status == "ok" {
-                    title = "\(r.combos)コンボ・\(r.steps)手"
-                    if let s = RouteText.start(r) { sub = "つかむ：" + s }
+                    let n = r.steps
+                    let p = RouteDrawing.nextStep(progress: content.progress, steps: n)
+                    if content.offRoute {
+                        title = "ルートから外れました（指を離すと次の盤面で計算）"
+                        titleColor = UIColor(red: 1, green: 0.55, blue: 0.5, alpha: 1)
+                    } else if p >= n {
+                        title = "最後まで動かしました。指を離してください"
+                        titleColor = UIColor(red: 0.6, green: 1, blue: 0.75, alpha: 1)
+                    } else if p > 0 {
+                        title = "\(p)/\(n)手　あと\(n - p)手（\(r.combos)コンボ）"
+                    } else if let s = RouteText.start(r) {
+                        title = "\(r.combos)コンボ・\(n)手　つかむ：\(s)"
+                    }
                 } else {
                     title = RouteText.status(r.status)
                 }
             } else if board != nil {
                 title = "ルートを計算しています…"
             }
-            (title as NSString).draw(in: CGRect(x: 16, y: 8, width: size.width - 32, height: 36),
-                                     withAttributes: [.font: UIFont.boldSystemFont(ofSize: 28), .foregroundColor: UIColor.white])
-            (sub as NSString).draw(in: CGRect(x: 16, y: 42, width: size.width - 32, height: 28),
-                                   withAttributes: [.font: UIFont.systemFont(ofSize: 22, weight: .semibold),
-                                                    .foregroundColor: UIColor(red: 0.72, green: 0.95, blue: 0.82, alpha: 1)])
+            (title as NSString).draw(in: CGRect(x: 14, y: 8, width: size.width - 28, height: 34),
+                                     withAttributes: [.font: UIFont.systemFont(ofSize: 25, weight: .bold), .foregroundColor: titleColor])
+            // 2行目：次の手順（大きな矢印）
+            if let r = res, r.status == "ok" {
+                RouteDrawing.drawNextStrip(g, result: r, progress: content.progress,
+                                           in: CGRect(x: 12, y: 50, width: size.width - 24, height: 92))
+            }
+
             guard let b = board else { return }
             let cols = b.size.cols, rows = b.size.rows
             let cell = min(size.width / CGFloat(cols), (size.height - header) / CGFloat(rows))
-            let ox = (size.width - cell * CGFloat(cols)) / 2
-            let oy = header
-            for i in 0..<b.size.count {
-                let x = ox + CGFloat(i % cols) * cell
-                let y = oy + CGFloat(i / cols) * cell
-                let even = (i / cols + i % cols) % 2 == 0
-                (even ? UIColor(red: 0.18, green: 0.22, blue: 0.33, alpha: 1) : UIColor(red: 0.21, green: 0.26, blue: 0.37, alpha: 1)).setFill()
-                g.fill(CGRect(x: x, y: y, width: cell, height: cell))
-                UIColor(OrbStyle.color(b.cells[i])).setFill()
-                g.fillEllipse(in: CGRect(x: x + cell * 0.1, y: y + cell * 0.1, width: cell * 0.8, height: cell * 0.8))
-            }
-            guard let r = res, r.status == "ok", let start = r.start, !r.arrows.isEmpty else { return }
-            let n = r.arrows.count
-            func pt(_ x: Double, _ y: Double) -> CGPoint {
-                CGPoint(x: ox + CGFloat(x) * cell, y: oy + CGFloat(y) * cell)
-            }
-            g.setLineCap(.round)
-            g.setLineJoin(.round)
-            for (i, a) in r.arrows.enumerated() {
-                let p1 = pt(a[0], a[1]), p2 = pt(a[2], a[3])
-                let frac = n > 1 ? CGFloat(i) / CGFloat(n - 1) : 0
-                let color = UIColor(hue: (350 - 92 * frac) / 360, saturation: 0.75, brightness: 1, alpha: 1)
-                g.setStrokeColor(UIColor.black.withAlphaComponent(0.75).cgColor)
-                g.setLineWidth(cell * 0.13 + 4)
-                g.move(to: p1); g.addLine(to: p2); g.strokePath()
-                g.setStrokeColor(color.cgColor)
-                g.setLineWidth(cell * 0.13)
-                g.move(to: p1); g.addLine(to: p2); g.strokePath()
-                // 矢じり
-                let ang = atan2(p2.y - p1.y, p2.x - p1.x), s = cell * 0.22
-                let t = CGPoint(x: p1.x + (p2.x - p1.x) * 0.72, y: p1.y + (p2.y - p1.y) * 0.72)
-                g.beginPath()
-                g.move(to: CGPoint(x: t.x + s * cos(ang), y: t.y + s * sin(ang)))
-                g.addLine(to: CGPoint(x: t.x + s * 0.8 * cos(ang + 2.45), y: t.y + s * 0.8 * sin(ang + 2.45)))
-                g.addLine(to: CGPoint(x: t.x + s * 0.8 * cos(ang - 2.45), y: t.y + s * 0.8 * sin(ang - 2.45)))
-                g.closePath()
-                g.setFillColor(color.cgColor)
-                g.fillPath()
-            }
-            // 手順番号（交差しても順番が分かるように）
-            let every = n > 24 ? 2 : 1
-            let rr = max(11, cell * 0.15)
-            for i in stride(from: 0, to: n, by: every) {
-                let a = r.arrows[i]
-                let m = CGPoint(x: (pt(a[0], a[1]).x + pt(a[2], a[3]).x) / 2, y: (pt(a[0], a[1]).y + pt(a[2], a[3]).y) / 2)
-                UIColor.white.setFill()
-                g.fillEllipse(in: CGRect(x: m.x - rr, y: m.y - rr, width: rr * 2, height: rr * 2))
-                let label = "\(i + 1)" as NSString
-                let attrs: [NSAttributedString.Key: Any] = [.font: UIFont.boldSystemFont(ofSize: rr * 1.1),
-                                                            .foregroundColor: UIColor(red: 0.1, green: 0.13, blue: 0.22, alpha: 1)]
-                let ls = label.size(withAttributes: attrs)
-                label.draw(at: CGPoint(x: m.x - ls.width / 2, y: m.y - ls.height / 2), withAttributes: attrs)
-            }
-            // つかむドロップ（緑の輪）と離す位置（白い四角）
-            let sp = pt(Double(start % cols) + 0.5, Double(start / cols) + 0.5)
-            g.setStrokeColor(UIColor(red: 0.17, green: 0.83, blue: 0.56, alpha: 1).cgColor)
-            g.setLineWidth(max(5, cell * 0.09))
-            g.strokeEllipse(in: CGRect(x: sp.x - cell * 0.46, y: sp.y - cell * 0.46, width: cell * 0.92, height: cell * 0.92))
-            if let last = r.arrows.last {
-                let e = pt(last[2], last[3]), es = cell * 0.15
-                UIColor.white.setFill()
-                g.fill(CGRect(x: e.x - es, y: e.y - es, width: es * 2, height: es * 2))
-                g.setStrokeColor(UIColor.black.cgColor)
-                g.setLineWidth(3)
-                g.stroke(CGRect(x: e.x - es, y: e.y - es, width: es * 2, height: es * 2))
+            let origin = CGPoint(x: (size.width - cell * CGFloat(cols)) / 2, y: header)
+            RouteDrawing.drawBoard(g, board: b, origin: origin, cell: cell, drawOrbs: true)
+            if let r = res {
+                RouteDrawing.drawRoute(g, result: r, origin: origin, cell: cell, progress: content.progress, phase: phase)
             }
         }
         return img.cgImage
@@ -382,4 +336,16 @@ struct PiPBar: View {
     }
 
     private var statusText: String { pip.state.statusText }
+}
+
+/// 小窓に表示する内容
+struct PiPContent {
+    var board: Board?
+    var result: ResultMessage?
+    var progress: Int?
+    var offRoute = false
+
+    var key: String {
+        "\(board?.raw.map(String.init).joined() ?? "-")|\(result?.status ?? "-")|\(result?.path.map(String.init).joined(separator: ",") ?? "")|\(progress ?? -1)|\(offRoute)"
+    }
 }

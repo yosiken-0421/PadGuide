@@ -145,48 +145,158 @@ public struct BoardReading: Codable, Equatable, Sendable {
 }
 
 public enum BoardReader {
-    /// マス中央付近を 3×3 点サンプリングし、信頼度で重み付けした多数決で決める。
-    /// 強化マーク・ロック・模様が一部の点に重なっても、基礎色が多数派になる。
+    /// 各色ドロップの基準の色相（度）。盤面ごとに実際の色へ合わせ直す。
+    static let prototypeHue: [OrbKind: Double] = [
+        .fire: 8, .light: 50, .wood: 130, .water: 205, .dark: 282, .heart: 330,
+    ]
+    static let colorKinds: [OrbKind] = [.fire, .water, .wood, .light, .dark, .heart]
+
+    /// 1マスの特徴（ドロップの内側だけを見る）
+    struct CellFeature {
+        var hue: Double?          // 鮮やかな画素の平均色相（なければ nil）
+        var colorfulRatio: Double // 鮮やかな画素の割合
+        var greyBrightRatio: Double
+        var meanV: Double
+        var meanS: Double
+        var hueSpread: Double     // 色相のばらつき（0=そろっている〜1）
+        var color: RGB
+    }
+
+    static func hueDistance(_ a: Double, _ b: Double) -> Double {
+        let d = abs(a - b).truncatingRemainder(dividingBy: 360)
+        return min(d, 360 - d)
+    }
+
+    /// ドロップの内側を同心円状にサンプリングする。
+    /// - 光沢（白いハイライト）や強化マーク・ロックの模様は「鮮やかでない画素」として除外し、基礎色だけを見る
+    /// - 縁の影で暗い画素も除外する
+    static func feature(_ src: PixelSource, cx: Double, cy: Double, cell: Double) -> CellFeature {
+        let patch = max(1, Int(cell * 0.02))
+        var sx = 0.0, sy = 0.0, wsum = 0.0
+        var colorful = 0, greyBright = 0, total = 0
+        var vs = 0.0, ss = 0.0
+        var cr = 0, cg = 0, cb = 0, cn = 0
+        let rings: [(Double, Int)] = [(0.0, 1), (0.1, 6), (0.19, 8), (0.28, 10), (0.35, 12)]
+        for (radius, count) in rings {
+            for k in 0..<count {
+                let ang = (Double(k) + (radius == 0.19 || radius == 0.35 ? 0.5 : 0)) / Double(count) * 2 * Double.pi
+                let x = Int(cx + cos(ang) * radius * cell)
+                let y = Int(cy + sin(ang) * radius * cell)
+                let c = average(src, x, y, patch)
+                let (h, sat, v) = c.hsv
+                total += 1
+                if sat >= 0.30 && v >= 0.22 {
+                    colorful += 1
+                    let w = sat * v
+                    sx += cos(h * Double.pi / 180) * w
+                    sy += sin(h * Double.pi / 180) * w
+                    wsum += w
+                    vs += v; ss += sat
+                    cr += Int(c.r); cg += Int(c.g); cb += Int(c.b); cn += 1
+                } else if sat < 0.24 && v > 0.55 {
+                    greyBright += 1
+                }
+            }
+        }
+        var hue: Double?
+        var spread = 1.0
+        if wsum > 0 {
+            var h = atan2(sy, sx) * 180 / Double.pi
+            if h < 0 { h += 360 }
+            hue = h
+            spread = 1 - min(1, (sx * sx + sy * sy).squareRoot() / wsum)
+        }
+        let color = cn > 0 ? RGB(UInt8(cr / cn), UInt8(cg / cn), UInt8(cb / cn)) : average(src, Int(cx), Int(cy), patch)
+        return CellFeature(hue: hue, colorfulRatio: Double(colorful) / Double(total),
+                           greyBrightRatio: Double(greyBright) / Double(total),
+                           meanV: colorful > 0 ? vs / Double(colorful) : color.hsv.v,
+                           meanS: colorful > 0 ? ss / Double(colorful) : color.hsv.s,
+                           hueSpread: spread, color: color)
+    }
+
+    /// 色相から最も近い色ドロップ
+    static func nearestKind(_ hue: Double, centers: [OrbKind: Double]) -> (OrbKind, Double, Double) {
+        var best = OrbKind.unknown, bestD = 999.0, second = 999.0
+        for k in colorKinds {
+            let d = hueDistance(hue, centers[k] ?? prototypeHue[k]!)
+            if d < bestD { second = bestD; bestD = d; best = k }
+            else if d < second { second = d }
+        }
+        return (best, bestD, second)
+    }
+
+    /// 盤面を読む。
+    /// 1. 各マスのドロップの内側から、鮮やかな画素の平均色相を求める（光沢・模様・影は除外）
+    /// 2. 基準の色相で仮に分類し、その盤面での各色の実際の色相に合わせ直して分類し直す（色味のずれに強い）
+    /// 3. 手動修正で覚えた色があれば、それを優先する
     public static func read(_ src: PixelSource, rect: BoardRect, classifier: ColorClassifier) -> BoardReading {
         let size = rect.size
-        let offsets: [Double] = [-0.2, 0, 0.2]
-        let patch = max(1, Int(rect.cell * 0.035))
+        var feats: [CellFeature] = []
+        feats.reserveCapacity(size.count)
+        for r in 0..<size.rows {
+            for c in 0..<size.cols {
+                let cx = rect.x + (Double(c) + 0.5) * rect.cell
+                let cy = rect.y + (Double(r) + 0.5) * rect.cell
+                feats.append(feature(src, cx: cx, cy: cy, cell: rect.cell))
+            }
+        }
+
+        // その盤面での各色の中心色相を求める（基準から大きくずれない範囲で）
+        var centers = prototypeHue
+        for _ in 0..<2 {
+            var acc: [OrbKind: (Double, Double, Int)] = [:]
+            for f in feats {
+                guard let h = f.hue, f.colorfulRatio >= 0.45 else { continue }
+                let (k, d, second) = nearestKind(h, centers: centers)
+                guard d < 30, second - d > 12 else { continue }
+                let e = acc[k] ?? (0, 0, 0)
+                acc[k] = (e.0 + cos(h * Double.pi / 180), e.1 + sin(h * Double.pi / 180), e.2 + 1)
+            }
+            for (k, e) in acc where e.2 >= 2 {
+                var h = atan2(e.1, e.0) * 180 / Double.pi
+                if h < 0 { h += 360 }
+                if hueDistance(h, prototypeHue[k]!) <= 25 { centers[k] = h }
+            }
+        }
+
         var cells: [CellReading] = []
         cells.reserveCapacity(size.count)
         var vSum = 0.0
-        for r in 0..<size.rows {
-            for c in 0..<size.cols {
-                var votes = [Double](repeating: 0, count: OrbKind.allCases.count)
-                var counts = [Int](repeating: 0, count: OrbKind.allCases.count)
-                var total = 0.0
-                var cr = 0, cg = 0, cb = 0, n = 0
-                for oy in offsets {
-                    for ox in offsets {
-                        let x = Int(rect.x + (Double(c) + 0.5 + ox) * rect.cell)
-                        let y = Int(rect.y + (Double(r) + 0.5 + oy) * rect.cell)
-                        let col = average(src, x, y, patch)
-                        let (k, conf) = classifier.classify(col)
-                        votes[Int(k.rawValue)] += max(conf, 0.05)
-                        counts[Int(k.rawValue)] += 1
-                        total += max(conf, 0.05)
-                        cr += Int(col.r); cg += Int(col.g); cb += Int(col.b); n += 1
-                    }
+        for f in feats {
+            vSum += f.meanV
+            // 手動修正で覚えた色を優先
+            if !classifier.learned.isEmpty {
+                let (k, conf) = classifier.classify(f.color)
+                if conf >= 0.95 {
+                    cells.append(CellReading(kind: k, confidence: conf, color: f.color))
+                    continue
                 }
-                // 不明以外で最も票の多い種類
-                var best = Int(OrbKind.unknown.rawValue)
-                var bestV = 0.0
-                for k in 0..<votes.count where k != Int(OrbKind.unknown.rawValue) && votes[k] > bestV {
-                    best = k; bestV = votes[k]
-                }
-                // 信頼度 = 票の割合 × 勝った点の色のはっきりさ
-                let share = total > 0 ? bestV / total : 0
-                let winnerAvg = counts[best] > 0 ? bestV / Double(counts[best]) : 0
-                let conf = min(1, share * (0.4 + 0.6 * winnerAvg))
-                let avg = RGB(UInt8(cr / n), UInt8(cg / n), UInt8(cb / n))
-                vSum += avg.hsv.v
-                let kind: OrbKind = conf < 0.35 ? .unknown : OrbKind(rawValue: Int8(best)) ?? .unknown
-                cells.append(CellReading(kind: kind, confidence: (conf * 100).rounded() / 100, color: avg))
             }
+            var kind = OrbKind.unknown
+            var conf = 0.0
+            if let h = f.hue, f.colorfulRatio >= 0.35 {
+                let (k, d, second) = nearestKind(h, centers: centers)
+                kind = k
+                // 近さ・他の色との差・色のそろい具合・鮮やかな画素の割合から信頼度を決める
+                let near = max(0, 1 - d / 45)
+                let margin = min(1, max(0, second - d) / 40)
+                let uniform = max(0, 1 - f.hueSpread * 2.5)
+                let coverage = min(1, f.colorfulRatio / 0.6)
+                conf = min(1, 0.25 + 0.75 * (0.35 * near + 0.25 * margin + 0.2 * uniform + 0.2 * coverage))
+                if d > 40 { conf = min(conf, 0.3) }
+                // 紫系のうち、とても暗いものは猛毒、くすんだものは毒の可能性（自信は低めにして黄色枠で知らせる。
+                // 手動で直すとその色を覚える）。通常の闇ドロップは鮮やかで明るい
+                if kind == .dark && f.meanV < 0.42 { kind = .mortalPoison; conf = min(conf, 0.55) }
+                else if kind == .dark && f.meanS < 0.42 { kind = .poison; conf = min(conf, 0.55) }
+            } else if f.greyBrightRatio >= 0.5 {
+                kind = .jammer
+                conf = min(1, 0.4 + f.greyBrightRatio * 0.5)
+            } else {
+                kind = .unknown
+                conf = 0.2
+            }
+            if conf < 0.35 { kind = .unknown }
+            cells.append(CellReading(kind: kind, confidence: (conf * 100).rounded() / 100, color: f.color))
         }
         return BoardReading(rect: rect, cells: cells, brightness: vSum / Double(max(1, size.count)))
     }
@@ -218,7 +328,7 @@ public enum BoardDetector {
         var best: (score: Double, rect: BoardRect)?
 
         for size in sizes {
-            for inset in [0.0, 0.02, 0.04] {
+            for inset in [0.0, 0.01, 0.02, 0.03, 0.045] {
                 let width = W * (1 - inset * 2)
                 let cell = width / Double(size.cols)
                 let h = cell * Double(size.rows)
@@ -264,13 +374,14 @@ public enum BoardDetector {
                     let hsv = RGB(p.0, p.1, p.2).hsv
                     inner += max(hsv.s, 0.25) * hsv.v
                 }
-                // マスの辺の中点（ドロップの外側）。位置がずれるとここが隣のドロップに重なって明るくなる
+                // ドロップの外側（マスの角と辺の中点）。位置がずれるとここが隣のドロップに重なって明るくなる
                 var outer = 0.0
-                for (fx, fy) in [(0.5, 0.03), (0.03, 0.5), (0.97, 0.5), (0.5, 0.97)] {
+                for (fx, fy) in [(0.5, 0.03), (0.03, 0.5), (0.97, 0.5), (0.5, 0.97),
+                                 (0.07, 0.07), (0.93, 0.07), (0.07, 0.93), (0.93, 0.93)] {
                     let p = src.rgb(clampX(src, x0 + rect.cell * fx), clampY(src, y0 + rect.cell * fy))
                     outer += RGB(p.0, p.1, p.2).hsv.v
                 }
-                s += inner / 4 - outer / 4 * 0.9
+                s += inner / 4 - outer / 8 * 0.9
             }
         }
         return s / Double(size.count)
