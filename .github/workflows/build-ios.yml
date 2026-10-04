@@ -22,9 +22,9 @@ on:
         required: false
         type: string
       cleanup_dev_certs:
-        description: "証明書の上限エラーが出たときにチェック：このワークフローが自動作成した開発用証明書（Created via API）を取り消してから作る"
+        description: "このワークフローが自動作成した開発用証明書（Created via API）を毎回整理してから作る（証明書の上限エラーを防ぐ。通常はオンのまま）"
         type: boolean
-        default: false
+        default: true
   workflow_call:
     inputs:
       release_mode:
@@ -38,7 +38,7 @@ on:
         required: false
       cleanup_dev_certs:
         type: boolean
-        default: false
+        default: true
 
 permissions:
   contents: read
@@ -189,9 +189,9 @@ jobs:
           } >> "$GITHUB_ENV"
           echo "署名の準備ができました"
 
-      - name: 自動作成された開発用証明書の整理（チェックしたときだけ）
+      - name: 自動作成された開発用証明書の整理（証明書の上限エラーを防ぐ）
         id: certcleanup
-        if: inputs.cleanup_dev_certs
+        if: inputs.cleanup_dev_certs != false
         env:
           ASC_KEY_PATH: ${{ runner.temp }}/keys/AuthKey.p8
         run: python3 .github/scripts/asc_cleanup_dev_certs.py
@@ -315,7 +315,7 @@ jobs:
             fi
             if grep -q "maximum number of certificates" "$RUNNER_TEMP/archive.log" 2>/dev/null; then
               echo ""
-              echo "**証明書の上限に達しています。** もう一度「Run workflow」を押し、**cleanup_dev_certs にチェック**を入れて実行してください。"
+              echo "**証明書の上限に達しています。** cleanup_dev_certs にチェックが入っているか確認して、もう一度「Run workflow」を押してください。"
               echo "（このワークフローが自動で作った開発用証明書「Created via API」だけを取り消してから作り直します。配布用の証明書には触りません）"
               echo "手動で直す場合：Apple Developer → Certificates, Identifiers & Profiles → Certificates で「Apple Development: Created via API」を選び Revoke。"
             fi
