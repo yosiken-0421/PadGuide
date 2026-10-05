@@ -35,6 +35,7 @@ struct ContentView: View {
                 settingsSection
                 pipSection
                 learnedSection
+                privacySection
                 Section {
                     Text(Self.disclaimer)
                         .font(.footnote)
@@ -237,6 +238,17 @@ struct ContentView: View {
     }
 
     static let pipNotice = "画面下の「小窓で表示」を押すと、盤面とルートの図が小窓（ピクチャ・イン・ピクチャ）で表示されます。小窓を開始してからゲームへ切り替えてください。iOS ではゲーム画面に直接ルートを重ねることはできないため、小窓をパズルの盤面に重ならない位置（画面の上のほう）へ動かして使ってください。PC ビューアーでも同じルートを見られます。"
+
+    private var privacySection: some View {
+        Section {
+            Link(destination: URL(string: "https://github.com/yosiken-0421/PadGuide/blob/main/PRIVACY.md")!) {
+                Label("プライバシーポリシー", systemImage: "hand.raised")
+            }
+            .accessibilityIdentifier("privacyPolicyLink")
+        } footer: {
+            Text("画面共有・カメラ・ローカルネットワークの利用目的、保存する情報、削除方法を確認できます。")
+        }
+    }
 
     private var learnedSection: some View {
         Section {
