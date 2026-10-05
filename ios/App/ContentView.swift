@@ -123,6 +123,12 @@ struct ContentView: View {
     @ViewBuilder private var boardSection: some View {
         Section {
             if let b = model.board {
+                if model.showingSample {
+                    Label("見本盤面（実際のゲーム画面は使っていません）", systemImage: "sparkles")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .accessibilityIdentifier("sampleBoardNotice")
+                }
                 BoardView(board: b, confidence: model.confidence, result: model.result, progress: model.progress) { i in
                     editingCell = i
                     showPicker = true
@@ -159,7 +165,11 @@ struct ContentView: View {
                     Button("再探索") { model.resolve() }
                         .buttonStyle(.borderless)
                     Spacer()
-                    if model.edited {
+                    if model.showingSample {
+                        Button("見本盤面を閉じる") { model.clearSampleBoard() }
+                            .buttonStyle(.borderless)
+                            .accessibilityIdentifier("closeSampleBoardButton")
+                    } else if model.edited {
                         Button("自動の結果に戻す") { model.revertToAuto() }
                             .buttonStyle(.borderless)
                     }
@@ -168,6 +178,12 @@ struct ContentView: View {
                 Text("まだ盤面がありません。画面共有を開始して、パズル画面を表示してください。")
                     .foregroundStyle(.secondary)
                     .accessibilityIdentifier("emptyBoard")
+                Button {
+                    model.loadSampleBoard()
+                } label: {
+                    Label("見本盤面で試す", systemImage: "play.rectangle")
+                }
+                .accessibilityIdentifier("sampleBoardButton")
             }
             if model.sharing {
                 Button("今の画面で計算し直す") { model.recalcFromScreen() }
@@ -175,7 +191,7 @@ struct ContentView: View {
                     .accessibilityIdentifier("recalcButton")
             }
         } header: {
-            Text("認識した盤面")
+            Text("盤面とルート")
         } footer: {
             Text("ルートを表示した後は、ドロップを動かしている間もルートを変えずに表示し続けます。コンボで消えて次の盤面になると、自動で計算し直します。黄色い枠は認識に自信がないマスです。タップすると正しい色に直せます。直した色の傾向はこの iPhone の中だけに保存されます。")
         }
