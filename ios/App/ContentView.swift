@@ -45,7 +45,7 @@ struct ContentView: View {
             // 小窓の表示レイヤーは常に画面に置いておく（画面に入っていないと小窓を開始できない）
             .safeAreaInset(edge: .bottom, spacing: 0) { PiPBar(pip: pip) }
             .onAppear {
-                pip.prepare(autoStart: !model.isUITest) { [weak m = model] in
+                pip.prepare(autoStart: false) { [weak m = model] in
                     PiPContent(board: m?.board, result: m?.result, progress: m?.progress, offRoute: m?.offRoute ?? false)
                 }
             }
@@ -236,7 +236,7 @@ struct ContentView: View {
         }
     }
 
-    static let pipNotice = "画面下の「小窓で表示」を押すか、画面共有中にゲームへ切り替えると、盤面とルートの図が小窓（ピクチャ・イン・ピクチャ）で表示されます。iOS ではゲーム画面に直接ルートを重ねることはできないため、小窓をパズルの盤面に重ならない位置（画面の上のほう）へ動かして使ってください。PC ビューアーでも同じルートを見られます。"
+    static let pipNotice = "画面下の「小窓で表示」を押すと、盤面とルートの図が小窓（ピクチャ・イン・ピクチャ）で表示されます。小窓を開始してからゲームへ切り替えてください。iOS ではゲーム画面に直接ルートを重ねることはできないため、小窓をパズルの盤面に重ならない位置（画面の上のほう）へ動かして使ってください。PC ビューアーでも同じルートを見られます。"
 
     private var learnedSection: some View {
         Section {
