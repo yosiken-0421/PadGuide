@@ -24,6 +24,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var edited = false
     @Published private(set) var solving = false
     @Published private(set) var learnedCount = 0
+    /// 画面共有なしでも動作を確認できる、アプリ独自配色の見本盤面
+    @Published private(set) var showingSample = false
 
     private var colors: [RGB] = []
     /// UI テスト用：見本盤面で「何手目まで進んだか」を指定する（-demoProgress N）
@@ -41,7 +43,7 @@ final class AppModel: ObservableObject {
         learnedCount = SharedStore.loadLearned().count
         let args = ProcessInfo.processInfo.arguments
         if let i = args.firstIndex(of: "-demoProgress"), i + 1 < args.count { demoProgress = Int(args[i + 1]) }
-        if args.contains("-demoBoard") { loadDemo() }
+        if args.contains("-demoBoard") { loadTestDemo() }
         timer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.poll() }
         }
@@ -55,6 +57,7 @@ final class AppModel: ObservableObject {
             if l.seq != lastSeq {
                 lastSeq = l.seq
                 latest = l
+                showingSample = false
                 if !edited { apply(l) }
             }
         } else if latest != nil {
@@ -190,9 +193,44 @@ final class AppModel: ObservableObject {
         connectionMessage = "切断しました"
     }
 
-    // MARK: UI テスト用の見本盤面（独自の配色。実際の画面は使わない）
+    // MARK: 見本盤面
 
-    private func loadDemo() {
+    /// 画面共有なしでも、アプリ単体で盤面認識後の表示・探索・ルート表示を試せる。
+    /// 第三者のゲーム画像や素材は使わず、アプリ独自の色と記号だけで構成する。
+    func loadSampleBoard() {
+        cancelFlag?.cancel()
+        edited = false
+        showingSample = true
+        progress = nil
+        offRoute = false
+        let b = Board(size: .sixByFive, string: """
+            RBGLDH
+            HRBLGD
+            DHRBGL
+            LDHRBG
+            GLDHRB
+            """)
+        board = b
+        confidence = Array(repeating: 0.98, count: b.size.count)
+        colors = []
+        resolve()
+    }
+
+    func clearSampleBoard() {
+        guard showingSample else { return }
+        cancelFlag?.cancel()
+        showingSample = false
+        board = nil
+        result = nil
+        confidence = []
+        colors = []
+        progress = nil
+        offRoute = false
+        solving = false
+    }
+
+    /// UI テスト用。手動修正テストのため 1 マスだけ不明を含める。
+    private func loadTestDemo() {
         let b = Board(size: .sixByFive, string: """
             RBGLDH
             HRB?GL
