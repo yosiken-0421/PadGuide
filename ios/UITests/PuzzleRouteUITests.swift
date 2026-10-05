@@ -47,6 +47,29 @@ final class PuzzleRouteUITests: XCTestCase {
         XCTAssertTrue(notice.label.contains("本アプリは操作を自動実行しません"))
     }
 
+    func testSampleBoardCanBeOpenedWithoutScreenShare() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-uitest"]
+        app.launch()
+
+        XCTAssertTrue(app.navigationBars["パズルルート"].waitForExistence(timeout: 10))
+        let sample = app.buttons["sampleBoardButton"]
+        XCTAssertTrue(sample.waitForExistence(timeout: 5), "見本盤面ボタンがある")
+        sample.tap()
+
+        let notice = app.staticTexts["sampleBoardNotice"]
+        XCTAssertTrue(notice.waitForExistence(timeout: 5), "実ゲーム画面を使わない見本であることを表示")
+        let summary = app.staticTexts["routeSummary"]
+        XCTAssertTrue(reveal(summary, in: app), "見本盤面のルートが表示される")
+        let solved = expectation(for: NSPredicate(format: "label CONTAINS 'コンボ'"), evaluatedWith: summary)
+        wait(for: [solved], timeout: 10)
+
+        let close = app.buttons["closeSampleBoardButton"]
+        XCTAssertTrue(reveal(close, in: app))
+        close.tap()
+        XCTAssertTrue(app.staticTexts["emptyBoard"].waitForExistence(timeout: 5), "見本盤面を閉じられる")
+    }
+
     // MARK: 小窓（ピクチャ・イン・ピクチャ）
 
     /// スクリーンショットの中で、指定した色に近い画素の数を数える
