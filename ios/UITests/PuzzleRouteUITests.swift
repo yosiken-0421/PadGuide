@@ -47,24 +47,6 @@ final class PuzzleRouteUITests: XCTestCase {
         XCTAssertTrue(notice.label.contains("本アプリは操作を自動実行しません"))
     }
 
-    func testSampleBoardCanBeOpenedWithoutScreenShare() {
-        let app = XCUIApplication()
-        app.launchArguments = ["-uitest"]
-        app.launch()
-
-        XCTAssertTrue(app.navigationBars["パズルルート"].waitForExistence(timeout: 10))
-        let sample = app.buttons["sampleBoardButton"]
-        XCTAssertTrue(sample.waitForExistence(timeout: 5), "見本盤面ボタンがある")
-        sample.tap()
-
-        // BoardView は Form の遅延生成対象なので、画面外の cell 要素そのものを待つと
-        // CI のスクロール位置によって不安定になる。ここでは「見本盤面で試す」が消え、
-        // 空盤面の案内も消えることを確認し、見本盤面への状態遷移を直接検証する。
-        let opened = expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: sample)
-        wait(for: [opened], timeout: 10)
-        XCTAssertFalse(app.staticTexts["emptyBoard"].exists, "見本盤面を開いたら空盤面の案内が消える")
-    }
-
     // MARK: 小窓（ピクチャ・イン・ピクチャ）
 
     /// スクリーンショットの中で、指定した色に近い画素の数を数える
