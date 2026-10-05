@@ -61,10 +61,12 @@ final class AppModel: ObservableObject {
                 if !edited { apply(l) }
             }
         } else if latest != nil {
-            // 画面共有が終わってデータが消された
+            // 画面共有が終わってデータが消された。見本盤面を表示中なら、その見本は残す。
             latest = nil
             lastSeq = -1
-            if !edited { board = nil; result = nil; confidence = []; colors = []; progress = nil; offRoute = false }
+            if !edited && !showingSample {
+                board = nil; result = nil; confidence = []; colors = []; progress = nil; offRoute = false
+            }
         }
         // 接続状態の確認（約 10 秒ごと）
         pingCounter += 1
@@ -199,8 +201,14 @@ final class AppModel: ObservableObject {
     /// 第三者のゲーム画像や素材は使わず、アプリ独自の色と記号だけで構成する。
     func loadSampleBoard() {
         cancelFlag?.cancel()
+        // App Group に前回の画面共有結果が残っていても、見本を開いた直後に
+        // poll() が古い結果で上書きしないよう、現在の seq を既読にする。
+        let current = SharedStore.readLatest()
+        latest = current
+        lastSeq = current?.seq ?? -1
         edited = false
         showingSample = true
+        result = nil
         progress = nil
         offRoute = false
         let b = Board(size: .sixByFive, string: """
