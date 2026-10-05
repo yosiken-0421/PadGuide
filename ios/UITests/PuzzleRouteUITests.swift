@@ -59,6 +59,7 @@ final class PuzzleRouteUITests: XCTestCase {
 
         // Label の accessibilityIdentifier は Form 内で要素型が変わることがあるため、
         // 見本盤面が実際に開いてルート計算まで進むことを機能として確認する。
+        sleep(3)   // 見本盤面の探索（既定は約1秒）を待ってからスクロールする
         let summary = app.staticTexts["routeSummary"]
         XCTAssertTrue(reveal(summary, in: app), "見本盤面のルートが表示される")
         let solved = expectation(for: NSPredicate(format: "label CONTAINS 'コンボ'"), evaluatedWith: summary)
