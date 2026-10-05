@@ -57,7 +57,7 @@ final class PuzzleRouteUITests: XCTestCase {
         XCTAssertTrue(sample.waitForExistence(timeout: 5), "見本盤面ボタンがある")
         sample.tap()
 
-        let notice = app.staticTexts["sampleBoardNotice"]
+        let notice = app.descendants(matching: .any).matching(identifier: "sampleBoardNotice").firstMatch
         XCTAssertTrue(notice.waitForExistence(timeout: 5), "実ゲーム画面を使わない見本であることを表示")
         let summary = app.staticTexts["routeSummary"]
         XCTAssertTrue(reveal(summary, in: app), "見本盤面のルートが表示される")
