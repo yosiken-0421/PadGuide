@@ -87,7 +87,7 @@ public enum LedgerCalculator {
     }
 
     public static func monthlySummary(entries: [LedgerEntry], monthContaining date: Date, calendar: Calendar = .current) -> LedgerSummary {
-        let monthEntries = entries(inMonthContaining: date, from: entries, calendar: calendar)
+        let monthEntries = LedgerCalculator.entries(inMonthContaining: date, from: entries, calendar: calendar)
         var income = 0
         var expense = 0
         for entry in monthEntries {
@@ -97,7 +97,7 @@ public enum LedgerCalculator {
     }
 
     public static func expenseByCategory(entries: [LedgerEntry], monthContaining date: Date, calendar: Calendar = .current) -> [CategoryTotal] {
-        let monthEntries = entries(inMonthContaining: date, from: entries, calendar: calendar)
+        let monthEntries = LedgerCalculator.entries(inMonthContaining: date, from: entries, calendar: calendar)
             .filter { $0.type == .expense }
         var totals: [LedgerCategory: Int] = [:]
         for entry in monthEntries {
