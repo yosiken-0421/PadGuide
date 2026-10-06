@@ -37,9 +37,12 @@ app_id=apps["data"][0]["id"]
 print("App ID:",app_id)
 
 # ----- Price: free, Japan as base territory -----
-price=req("GET",f"{API1}/apps/{app_id}/appPriceSchedule")
-if price and price.get("data"):
-    print("Price schedule already exists:",price["data"]["id"])
+price=req("GET",f"{API1}/apps/{app_id}/appPriceSchedule",ok=(200,))
+schedule_id=price["data"]["id"]
+manual=req("GET",f"{API1}/appPriceSchedules/{schedule_id}/manualPrices",params={"limit":"50"},ok=(200,))
+
+if manual.get("data"):
+    print("Manual app price already configured:",[x["id"] for x in manual["data"]])
 else:
     points=req(
         "GET",f"{API1}/apps/{app_id}/appPricePoints",
@@ -83,15 +86,15 @@ else:
         }]
     }
     created=req("POST",API1+"/appPriceSchedules",payload=payload,ok=(201,))
-    print("Created free price schedule:",created["data"]["id"])
+    print("Configured free price schedule:",created["data"]["id"])
 
-# Verify base territory and manual free price.
-price=req(
-    "GET",f"{API1}/apps/{app_id}/appPriceSchedule",
-    params={"include":"baseTerritory,manualPrices","limit[manualPrices]":"50"},
-    ok=(200,)
-)
-print("Price schedule verified:",price["data"]["id"])
+base=req("GET",f"{API1}/appPriceSchedules/{schedule_id}/baseTerritory",ok=(200,))
+if base["data"]["id"] != BASE_TERRITORY:
+    raise RuntimeError("Base territory verification failed")
+manual=req("GET",f"{API1}/appPriceSchedules/{schedule_id}/manualPrices",params={"limit":"50"},ok=(200,))
+if not manual.get("data"):
+    raise RuntimeError("Manual price verification failed")
+print("Price schedule verified: FREE / JPN")
 
 # ----- Availability: Japan only initially -----
 availability=req("GET",f"{API1}/apps/{app_id}/appAvailabilityV2")
