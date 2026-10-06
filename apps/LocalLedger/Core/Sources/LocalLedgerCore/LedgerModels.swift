@@ -51,23 +51,74 @@ public struct LedgerSummary: Equatable, Sendable {
     public var income: Int
     public var expense: Int
     public var balance: Int { income - expense }
+
     public init(income: Int, expense: Int) {
         self.income = income
         self.expense = expense
     }
 }
 
+public struct CategoryTotal: Identifiable, Equatable, Sendable {
+    public var category: LedgerCategory
+    public var amount: Int
+    public var id: String { category.rawValue }
+
+    public init(category: LedgerCategory, amount: Int) {
+        self.category = category
+        self.amount = amount
+    }
+}
+
+public struct MonthTotal: Identifiable, Equatable, Sendable {
+    public var month: Date
+    public var expense: Int
+    public var id: Date { month }
+
+    public init(month: Date, expense: Int) {
+        self.month = month
+        self.expense = expense
+    }
+}
+
 public enum LedgerCalculator {
+    public static func entries(inMonthContaining date: Date, from entries: [LedgerEntry], calendar: Calendar = .current) -> [LedgerEntry] {
+        guard let interval = calendar.dateInterval(of: .month, for: date) else { return [] }
+        return entries.filter { interval.contains($0.date) }
+    }
+
     public static func monthlySummary(entries: [LedgerEntry], monthContaining date: Date, calendar: Calendar = .current) -> LedgerSummary {
-        guard let interval = calendar.dateInterval(of: .month, for: date) else {
-            return LedgerSummary(income: 0, expense: 0)
-        }
+        let monthEntries = entries(inMonthContaining: date, from: entries, calendar: calendar)
         var income = 0
         var expense = 0
-        for entry in entries where interval.contains(entry.date) {
+        for entry in monthEntries {
             if entry.type == .income { income += entry.amount } else { expense += entry.amount }
         }
         return LedgerSummary(income: income, expense: expense)
+    }
+
+    public static func expenseByCategory(entries: [LedgerEntry], monthContaining date: Date, calendar: Calendar = .current) -> [CategoryTotal] {
+        let monthEntries = entries(inMonthContaining: date, from: entries, calendar: calendar)
+            .filter { $0.type == .expense }
+        var totals: [LedgerCategory: Int] = [:]
+        for entry in monthEntries {
+            totals[entry.category, default: 0] += entry.amount
+        }
+        return totals
+            .map { CategoryTotal(category: $0.key, amount: $0.value) }
+            .sorted {
+                if $0.amount == $1.amount { return $0.category.rawValue < $1.category.rawValue }
+                return $0.amount > $1.amount
+            }
+    }
+
+    public static func recentMonthlyExpenses(entries: [LedgerEntry], endingAt date: Date, count: Int, calendar: Calendar = .current) -> [MonthTotal] {
+        guard count > 0 else { return [] }
+        let monthStart = calendar.date(from: calendar.dateComponents([.year, .month], from: date)) ?? date
+        return (0..<count).reversed().compactMap { offset in
+            guard let month = calendar.date(byAdding: .month, value: -offset, to: monthStart) else { return nil }
+            let summary = monthlySummary(entries: entries, monthContaining: month, calendar: calendar)
+            return MonthTotal(month: month, expense: summary.expense)
+        }
     }
 
     public static func filtered(entries: [LedgerEntry], query: String) -> [LedgerEntry] {

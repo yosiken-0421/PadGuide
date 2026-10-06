@@ -2,23 +2,47 @@ import SwiftUI
 import LocalLedgerCore
 
 struct ContentView: View {
+    var body: some View {
+        TabView {
+            RecordsView()
+                .tabItem { Label("記録", systemImage: "list.bullet.rectangle") }
+
+            InsightsView()
+                .tabItem { Label("分析", systemImage: "chart.bar") }
+
+            SettingsView()
+                .tabItem { Label("設定", systemImage: "gearshape") }
+        }
+        .accessibilityIdentifier("ledgerRoot")
+    }
+}
+
+private struct RecordsView: View {
     @EnvironmentObject private var store: LedgerStore
     @State private var showingAdd = false
     @State private var showingDeleteAll = false
     @State private var query = ""
+    @State private var selectedMonth = Date()
+
+    private var calendar: Calendar { .current }
 
     private var summary: LedgerSummary {
-        LedgerCalculator.monthlySummary(entries: store.entries, monthContaining: Date())
+        LedgerCalculator.monthlySummary(entries: store.entries, monthContaining: selectedMonth)
+    }
+
+    private var monthEntries: [LedgerEntry] {
+        LedgerCalculator.entries(inMonthContaining: selectedMonth, from: store.entries)
     }
 
     private var visibleEntries: [LedgerEntry] {
-        LedgerCalculator.filtered(entries: store.entries, query: query).sorted { $0.date > $1.date }
+        LedgerCalculator.filtered(entries: monthEntries, query: query).sorted { $0.date > $1.date }
     }
 
     var body: some View {
         NavigationStack {
             List {
                 Section {
+                    MonthPicker(selectedMonth: $selectedMonth)
                     SummaryView(summary: summary)
                         .listRowInsets(EdgeInsets())
                         .listRowBackground(Color.clear)
@@ -27,9 +51,9 @@ struct ContentView: View {
                 Section("記録") {
                     if visibleEntries.isEmpty {
                         ContentUnavailableView(
-                            query.isEmpty ? "まだ記録がありません" : "一致する記録がありません",
-                            systemImage: query.isEmpty ? "yensign.circle" : "magnifyingglass",
-                            description: Text(query.isEmpty ? "右上の＋から最初の収支を追加できます。" : "検索条件を変えてください。")
+                            query.isEmpty ? "この月の記録はありません" : "一致する記録がありません",
+                            systemImage: query.isEmpty ? "calendar.badge.plus" : "magnifyingglass",
+                            description: Text(query.isEmpty ? "右上の＋から収支を追加できます。" : "検索条件を変えてください。")
                         )
                     } else {
                         ForEach(visibleEntries) { entry in
@@ -53,7 +77,6 @@ struct ContentView: View {
                 }
             }
             .navigationTitle("まいにち家計簿")
-            .accessibilityIdentifier("ledgerRoot")
             .searchable(text: $query, prompt: "メモ・カテゴリを検索")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
@@ -74,17 +97,44 @@ struct ContentView: View {
     }
 }
 
+private struct MonthPicker: View {
+    @Binding var selectedMonth: Date
+
+    var body: some View {
+        HStack {
+            Button {
+                selectedMonth = Calendar.current.date(byAdding: .month, value: -1, to: selectedMonth) ?? selectedMonth
+            } label: {
+                Image(systemName: "chevron.left")
+            }
+            .accessibilityLabel("前の月")
+
+            Spacer()
+            Text(selectedMonth, format: .dateTime.year().month())
+                .font(.headline)
+            Spacer()
+
+            Button {
+                let next = Calendar.current.date(byAdding: .month, value: 1, to: selectedMonth) ?? selectedMonth
+                if next <= Date() { selectedMonth = next }
+            } label: {
+                Image(systemName: "chevron.right")
+            }
+            .accessibilityLabel("次の月")
+            .disabled(Calendar.current.isDate(selectedMonth, equalTo: Date(), toGranularity: .month))
+        }
+    }
+}
+
 private struct SummaryView: View {
     let summary: LedgerSummary
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("今月").font(.headline)
-            HStack(spacing: 12) {
-                SummaryCell(title: "収入", value: summary.income)
-                SummaryCell(title: "支出", value: summary.expense)
-                SummaryCell(title: "残高", value: summary.balance)
-            }
-        }.padding(.vertical, 8)
+        HStack(spacing: 10) {
+            SummaryCell(title: "収入", value: summary.income)
+            SummaryCell(title: "支出", value: summary.expense)
+            SummaryCell(title: "残高", value: summary.balance)
+        }
+        .padding(.vertical, 8)
     }
 }
 
@@ -95,10 +145,10 @@ private struct SummaryCell: View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title).font(.caption).foregroundStyle(.secondary)
             Text(value, format: .currency(code: "JPY").precision(.fractionLength(0)))
-                .font(.headline).minimumScaleFactor(0.7).lineLimit(1)
+                .font(.headline).minimumScaleFactor(0.55).lineLimit(1)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(12)
+        .padding(10)
         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 14))
     }
 }
