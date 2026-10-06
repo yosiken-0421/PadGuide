@@ -1,4 +1,4 @@
-import os, sys, time, uuid, json
+import os, sys, time, json
 import jwt, requests
 
 API1="https://api.appstoreconnect.apple.com/v1"
@@ -66,7 +66,7 @@ else:
 
     price_point_id=free["id"]
     print("Free JPN price point:",price_point_id)
-    temp=str(uuid.uuid4())
+    temp="${manual-price}"
     payload={
         "data":{
             "type":"appPriceSchedules",
@@ -101,7 +101,7 @@ availability=req("GET",f"{API1}/apps/{app_id}/appAvailabilityV2")
 if availability and availability.get("data"):
     print("Availability already exists:",availability["data"]["id"])
 else:
-    temp=str(uuid.uuid4())
+    temp="${japan-availability}"
     payload={
         "data":{
             "type":"appAvailabilities",
