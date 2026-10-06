@@ -85,6 +85,12 @@ jobs:
           xcrun simctl status_bar "$SIM_UDID" override \
             --time "9:41" --batteryState charged --batteryLevel 100 --wifiBars 3 --cellularBars 4 || true
 
+          # First simulator launch can spend several seconds initializing SwiftUI.
+          # Warm it once so the first Store screenshot never captures a blank launch frame.
+          xcrun simctl launch "$SIM_UDID" "$BUNDLE" --demo-data --records-tab >/dev/null
+          sleep 7
+          xcrun simctl terminate "$SIM_UDID" "$BUNDLE" 2>/dev/null || true
+
           capture () {
             NAME="$1"
             shift
@@ -109,6 +115,11 @@ jobs:
               1260x2736|1290x2796|1320x2868) ;;
               *) echo "::error::Unexpected iPhone screenshot size: ${W}x${H}"; exit 1 ;;
             esac
+            BYTES=$(stat -f%z "$F")
+            if [ "$BYTES" -lt 120000 ]; then
+              echo "::error::Screenshot looks blank or incomplete: $(basename "$F") (${BYTES} bytes)"
+              exit 1
+            fi
           done
 
       - name: Save screenshots

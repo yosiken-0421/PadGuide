@@ -37,6 +37,7 @@ struct ContentView: View {
                 .tabItem { Label("設定", systemImage: "gearshape") }
                 .tag(RootTab.settings)
         }
+        .environment(\.locale, Locale(identifier: "ja_JP"))
         .accessibilityIdentifier("ledgerRoot")
     }
 }
