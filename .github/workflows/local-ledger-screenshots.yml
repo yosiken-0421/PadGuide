@@ -11,6 +11,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: local-ledger-screenshots-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   screenshots:
     runs-on: macos-26
@@ -56,12 +60,6 @@ jobs:
           xcrun simctl boot "$UDID"
           xcrun simctl bootstatus "$UDID" -b
 
-          # Store screenshots are Japanese, so force a stable Japanese locale.
-          xcrun simctl spawn "$UDID" defaults write NSGlobalDomain AppleLanguages -array ja
-          xcrun simctl spawn "$UDID" defaults write NSGlobalDomain AppleLocale -string ja_JP
-          xcrun simctl shutdown "$UDID"
-          xcrun simctl boot "$UDID"
-          xcrun simctl bootstatus "$UDID" -b
 
       - name: Build and install
         run: |
@@ -90,7 +88,7 @@ jobs:
             NAME="$1"
             shift
             xcrun simctl terminate "$SIM_UDID" "$BUNDLE" 2>/dev/null || true
-            xcrun simctl launch "$SIM_UDID" "$BUNDLE" --demo-data "$@"
+            xcrun simctl launch "$SIM_UDID" "$BUNDLE" --demo-data "$@" -AppleLanguages "(ja)" -AppleLocale "ja_JP"
             sleep 3
             xcrun simctl io "$SIM_UDID" screenshot "$RUNNER_TEMP/$NAME.png"
             sips -s format jpeg -s formatOptions 95 "$RUNNER_TEMP/$NAME.png" --out "$RUNNER_TEMP/screenshots/$NAME.jpg" >/dev/null
