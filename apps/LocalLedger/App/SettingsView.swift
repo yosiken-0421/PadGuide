@@ -1,9 +1,29 @@
 import SwiftUI
 
 struct SettingsView: View {
+    @EnvironmentObject private var store: LedgerStore
+
     var body: some View {
         NavigationStack {
             List {
+                Section("家計管理") {
+                    NavigationLink {
+                        BudgetSettingsView()
+                    } label: {
+                        HStack {
+                            Text("月予算")
+                            Spacer()
+                            if let budget = store.monthlyBudget {
+                                Text(budget, format: .currency(code: "JPY").precision(.fractionLength(0)))
+                                    .foregroundStyle(.secondary)
+                            } else {
+                                Text("未設定")
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }
+
                 Section("このアプリについて") {
                     LabeledContent("保存場所", value: "このiPhone内のみ")
                     LabeledContent("アカウント", value: "不要")
@@ -23,19 +43,56 @@ struct SettingsView: View {
     }
 }
 
+private struct BudgetSettingsView: View {
+    @EnvironmentObject private var store: LedgerStore
+    @State private var amountText = ""
+
+    var body: some View {
+        Form {
+            Section {
+                TextField("例: 50000", text: $amountText)
+                    .keyboardType(.numberPad)
+                    .accessibilityIdentifier("budgetField")
+
+                Button("保存") {
+                    let normalized = amountText.replacingOccurrences(of: ",", with: "")
+                    store.setMonthlyBudget(Int(normalized))
+                    amountText = store.monthlyBudget.map(String.init) ?? ""
+                }
+                .disabled((Int(amountText.replacingOccurrences(of: ",", with: "")) ?? 0) <= 0)
+
+                if store.monthlyBudget != nil {
+                    Button("予算を解除", role: .destructive) {
+                        store.setMonthlyBudget(nil)
+                        amountText = ""
+                    }
+                }
+            } footer: {
+                Text("予算は端末内だけに保存されます。")
+            }
+        }
+        .navigationTitle("月予算")
+        .navigationBarTitleDisplayMode(.inline)
+        .onAppear {
+            amountText = store.monthlyBudget.map(String.init) ?? ""
+        }
+    }
+}
+
 private struct PrivacyPolicyView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 Text("プライバシーポリシー")
                     .font(.title.bold())
+
                 Text("最終更新: 2026-10-06")
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
                 Group {
                     Text("データの保存").font(.headline)
-                    Text("入力した金額、カテゴリ、日付、メモは利用者のiPhone内だけに保存されます。開発者のサーバーや第三者のクラウドへ送信しません。")
+                    Text("入力した金額、カテゴリ、日付、メモ、月予算は利用者のiPhone内だけに保存されます。開発者のサーバーや第三者のクラウドへ送信しません。")
 
                     Text("収集・追跡").font(.headline)
                     Text("個人情報、広告識別子、位置情報、連絡先、写真、閲覧履歴などを収集しません。広告SDK、解析SDK、トラッキングSDKを使用しません。")
