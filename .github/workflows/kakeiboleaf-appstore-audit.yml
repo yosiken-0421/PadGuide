@@ -165,6 +165,13 @@ jobs:
                   rid=((rel or {}).get("data") or {}).get("id")
                   print(f"APP_INFO_{rel_name.upper()}_ID",rid)
 
+              age=get(f"/appInfos/{info_id}/ageRatingDeclaration")
+              if age and age.get("data"):
+                  print("AGE_RATING",json.dumps({
+                      "id":age["data"]["id"],
+                      "attributes":age["data"].get("attributes",{})
+                  },ensure_ascii=False,sort_keys=True))
+
           cats=get("/appCategories",{"filter[platforms]":"IOS","exists[parent]":"false","limit":"200"})
           for row in (cats or {}).get("data",[]):
               print("CATEGORY",json.dumps({"id":row["id"]},ensure_ascii=False))
