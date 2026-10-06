@@ -4,6 +4,12 @@ import LocalLedgerCore
 @MainActor
 final class LedgerStore: ObservableObject {
     @Published private(set) var entries: [LedgerEntry] = []
+    @Published private(set) var monthlyBudget: Int?
+
+    private struct StoredLedger: Codable {
+        var entries: [LedgerEntry]
+        var monthlyBudget: Int?
+    }
 
     private let fileURL: URL
     private let encoder = JSONEncoder()
@@ -13,14 +19,21 @@ final class LedgerStore: ObservableObject {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         let directory = base.appendingPathComponent("LocalLedger", isDirectory: true)
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        self.fileURL = fileURL ?? directory.appendingPathComponent("entries.json")
+        self.fileURL = fileURL ?? directory.appendingPathComponent("ledger.json")
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         load()
     }
 
     func add(_ entry: LedgerEntry) {
         entries.append(entry)
-        entries.sort { $0.date > $1.date }
+        sortEntries()
+        save()
+    }
+
+    func update(_ entry: LedgerEntry) {
+        guard let index = entries.firstIndex(where: { $0.id == entry.id }) else { return }
+        entries[index] = entry
+        sortEntries()
         save()
     }
 
@@ -34,17 +47,52 @@ final class LedgerStore: ObservableObject {
         save()
     }
 
+    func setMonthlyBudget(_ amount: Int?) {
+        if let amount, amount > 0 {
+            monthlyBudget = amount
+        } else {
+            monthlyBudget = nil
+        }
+        save()
+    }
+
+    private func sortEntries() {
+        entries.sort {
+            if $0.date == $1.date { return $0.id.uuidString < $1.id.uuidString }
+            return $0.date > $1.date
+        }
+    }
+
     private func load() {
-        guard let data = try? Data(contentsOf: fileURL),
-              let decoded = try? decoder.decode([LedgerEntry].self, from: data) else {
+        guard let data = try? Data(contentsOf: fileURL) else {
             entries = []
+            monthlyBudget = nil
             return
         }
-        entries = decoded.sorted { $0.date > $1.date }
+
+        if let decoded = try? decoder.decode(StoredLedger.self, from: data) {
+            entries = decoded.entries
+            monthlyBudget = decoded.monthlyBudget
+            sortEntries()
+            return
+        }
+
+        // v1初期形式（配列のみ）からの移行用。
+        if let legacy = try? decoder.decode([LedgerEntry].self, from: data) {
+            entries = legacy
+            monthlyBudget = nil
+            sortEntries()
+            save()
+            return
+        }
+
+        entries = []
+        monthlyBudget = nil
     }
 
     private func save() {
-        guard let data = try? encoder.encode(entries) else { return }
+        let payload = StoredLedger(entries: entries, monthlyBudget: monthlyBudget)
+        guard let data = try? encoder.encode(payload) else { return }
         try? data.write(to: fileURL, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
     }
 }
