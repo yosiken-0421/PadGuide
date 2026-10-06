@@ -207,9 +207,9 @@ final class PuzzleRouteUITests: XCTestCase {
 
         button.tap()
         XCTAssertFalse(button.isEnabled, "開始中はボタンが無効（連打で二重に開始しない）")
-        let starting = expectation(for: NSPredicate(format: "label CONTAINS '開始しています'"), evaluatedWith: button)
-        wait(for: [starting], timeout: 1.5)
 
+        // 「開始しています…」は短時間だけの表示で、負荷の高い CI では tap() が戻る前に
+        // 失敗状態へ遷移することがある。重要な挙動（連打防止と失敗表示）を直接確認する。
         let status = app.staticTexts["pipStatus"]
         let failed = expectation(for: NSPredicate(format: "label CONTAINS '小窓を開始できませんでした'"), evaluatedWith: status)
         wait(for: [failed], timeout: 10)

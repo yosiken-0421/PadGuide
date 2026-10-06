@@ -1,0 +1,17 @@
+name: Release candidate validation
+
+on:
+  push:
+    branches:
+      - release/appstore-prep
+
+permissions:
+  contents: read
+
+jobs:
+  ios:
+    uses: ./.github/workflows/build-ios.yml
+    with:
+      release_mode: build_only
+      cleanup_dev_certs: true
+    secrets: inherit
