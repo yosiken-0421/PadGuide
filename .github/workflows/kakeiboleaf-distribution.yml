@@ -1,0 +1,60 @@
+name: Configure KakeiboLeaf Distribution
+
+on:
+  push:
+    branches:
+      - app/local-ledger-v1
+    paths:
+      - ".github/workflows/kakeiboleaf-distribution.yml"
+      - "apps/LocalLedger/scripts/configure_distribution.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  configure:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare App Store Connect key
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/asc"
+          chmod 700 "$RUNNER_TEMP/asc"
+          python3 - <<'PY'
+          import os,re,base64,sys
+          for v in ("ASC_KEY_ID","ASC_ISSUER_ID","ASC_KEY_P8"):
+              if not os.environ.get(v):
+                  print(f"::error::Missing {v}")
+                  sys.exit(1)
+          raw=os.environ["ASC_KEY_P8"]
+          body=re.sub(r"-----(BEGIN|END)[^-]*-----","",raw)
+          body=re.sub(r"[^A-Za-z0-9+/=]","",body)
+          der=base64.b64decode(body + "=" * (-len(body) % 4))
+          if len(der)<100:
+              print("::error::Invalid private key")
+              sys.exit(1)
+          b64=base64.b64encode(der).decode()
+          pem="-----BEGIN PRIVATE KEY-----\n"+"\n".join(b64[i:i+64] for i in range(0,len(b64),64))+"\n-----END PRIVATE KEY-----\n"
+          path=os.path.join(os.environ["RUNNER_TEMP"],"asc","AuthKey.p8")
+          open(path,"w").write(pem)
+          os.chmod(path,0o600)
+          PY
+          echo "ASC_KEY_ID_CLEAN=$(printf '%s' "$ASC_KEY_ID" | tr -d '[:space:]')" >> "$GITHUB_ENV"
+          echo "ASC_ISSUER_ID_CLEAN=$(printf '%s' "$ASC_ISSUER_ID" | tr -d '[:space:]')" >> "$GITHUB_ENV"
+      - name: Configure free price and Japan availability
+        env:
+          ASC_KEY_PATH: ${{ runner.temp }}/asc/AuthKey.p8
+        run: |
+          python3 -m venv "$RUNNER_TEMP/asc/venv"
+          "$RUNNER_TEMP/asc/venv/bin/python" -m pip install --quiet pyjwt cryptography requests
+          "$RUNNER_TEMP/asc/venv/bin/python" apps/LocalLedger/scripts/configure_distribution.py
+      - name: Cleanup
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/asc"
