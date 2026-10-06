@@ -86,7 +86,8 @@ else:
         }]
     }
     created=req("POST",API1+"/appPriceSchedules",payload=payload,ok=(201,))
-    print("Configured free price schedule:",created["data"]["id"])
+    schedule_id=created["data"]["id"]
+    print("Configured free price schedule:",schedule_id)
 
 base=req("GET",f"{API1}/appPriceSchedules/{schedule_id}/baseTerritory",ok=(200,))
 if base["data"]["id"] != BASE_TERRITORY:
@@ -97,33 +98,57 @@ if not manual.get("data"):
 print("Price schedule verified: FREE / JPN")
 
 # ----- Availability: Japan only initially -----
+#
+# App Store Connect v2 creates territoryAvailabilities inline. On the first
+# creation, send the complete territory set and mark only Japan available.
+# Each inline resource uses a local id such as ${JPN}; the real territory
+# code belongs in relationships.territory.
 availability=req("GET",f"{API1}/apps/{app_id}/appAvailabilityV2")
 if availability and availability.get("data"):
     print("Availability already exists:",availability["data"]["id"])
 else:
-    temp="${japan-availability}"
+    territory_response=req("GET",API1+"/territories",params={"limit":"200"},ok=(200,))
+    territory_ids=sorted(
+        row["id"] for row in territory_response.get("data",[])
+        if row.get("id")
+    )
+    if BASE_TERRITORY not in territory_ids:
+        raise RuntimeError("Japan territory was not returned by App Store Connect")
+    if not territory_ids:
+        raise RuntimeError("No App Store territories returned")
+
+    relationship_data=[]
+    included=[]
+    for territory_id in territory_ids:
+        local_id=f"${{{territory_id}}}"
+        relationship_data.append({
+            "type":"territoryAvailabilities",
+            "id":local_id,
+        })
+        included.append({
+            "type":"territoryAvailabilities",
+            "id":local_id,
+            "attributes":{"available":territory_id == BASE_TERRITORY},
+            "relationships":{
+                "territory":{"data":{"type":"territories","id":territory_id}}
+            },
+        })
+
+    print("Creating availability entries:",len(included))
+    print("Enabled territories:",[BASE_TERRITORY])
     payload={
         "data":{
             "type":"appAvailabilities",
             "attributes":{"availableInNewTerritories":False},
             "relationships":{
                 "app":{"data":{"type":"apps","id":app_id}},
-                "territoryAvailabilities":{
-                    "data":[{"type":"territoryAvailabilities","id":temp}]
-                }
+                "territoryAvailabilities":{"data":relationship_data}
             }
         },
-        "included":[{
-            "type":"territoryAvailabilities",
-            "id":temp,
-            "attributes":{"available":True},
-            "relationships":{
-                "territory":{"data":{"type":"territories","id":BASE_TERRITORY}}
-            }
-        }]
+        "included":included
     }
     created=req("POST",API2+"/appAvailabilities",payload=payload,ok=(201,))
-    print("Created Japan availability:",created["data"]["id"])
+    print("Created Japan-only availability:",created["data"]["id"])
 
 availability=req("GET",f"{API1}/apps/{app_id}/appAvailabilityV2",ok=(200,))
 availability_id=availability["data"]["id"]
@@ -132,13 +157,20 @@ territories=req(
     params={"include":"territory","limit":"200"},ok=(200,)
 )
 available_ids=[]
+all_ids=[]
 for row in territories.get("data",[]):
-    if row.get("attributes",{}).get("available") is True:
-        rel=row.get("relationships",{}).get("territory",{}).get("data") or {}
-        if rel.get("id"):
-            available_ids.append(rel["id"])
-print("Available territories:",sorted(available_ids))
-if BASE_TERRITORY not in available_ids:
-    raise RuntimeError("Japan availability verification failed")
+    rel=row.get("relationships",{}).get("territory",{}).get("data") or {}
+    territory_id=rel.get("id")
+    if territory_id:
+        all_ids.append(territory_id)
+        if row.get("attributes",{}).get("available") is True:
+            available_ids.append(territory_id)
 
-print("KakeiboLeaf distribution configuration complete: FREE / Japan.")
+print("Territory entries:",len(all_ids))
+print("Available territories:",sorted(available_ids))
+if sorted(set(available_ids)) != [BASE_TERRITORY]:
+    raise RuntimeError(f"Japan-only availability verification failed: {sorted(set(available_ids))}")
+if BASE_TERRITORY not in all_ids:
+    raise RuntimeError("Japan territory entry missing after availability creation")
+
+print("KakeiboLeaf distribution configuration complete: FREE / Japan only.")
