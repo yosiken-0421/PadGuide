@@ -1,0 +1,143 @@
+name: LocalLedger App Store Screenshots
+
+on:
+  push:
+    branches:
+      - app/local-ledger-v1
+    paths:
+      - "apps/LocalLedger/**"
+      - ".github/workflows/local-ledger-screenshots.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: local-ledger-screenshots-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  screenshots:
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: |
+          X=$(ls -d /Applications/Xcode_2[6-9]*.app 2>/dev/null | sort -V | tail -1)
+          test -n "$X"
+          sudo xcode-select -s "$X/Contents/Developer"
+          xcodebuild -version
+
+      - name: Generate project
+        working-directory: apps/LocalLedger
+        run: |
+          brew install xcodegen
+          xcodegen generate
+
+      - name: Create 6.9-inch simulator
+        run: |
+          RUNTIME=$(xcrun simctl list runtimes -j | python3 -c "
+          import sys,json
+          rs=[r for r in json.load(sys.stdin)['runtimes'] if r.get('platform')=='iOS' and r.get('isAvailable')]
+          rs.sort(key=lambda r:[int(x) for x in r['version'].split('.')])
+          print(rs[-1]['identifier'] if rs else '')")
+          test -n "$RUNTIME"
+
+          UDID=""
+          DEVICE=""
+          for T in iPhone-17-Pro-Max iPhone-16-Pro-Max iPhone-15-Pro-Max; do
+            UDID=$(xcrun simctl create "LocalLedger Screenshot" "com.apple.CoreSimulator.SimDeviceType.$T" "$RUNTIME" 2>/dev/null || true)
+            if [ -n "$UDID" ]; then DEVICE="$T"; break; fi
+          done
+          if [ -z "$UDID" ]; then
+            echo "::error::6.9-inch compatible simulator could not be created"
+            exit 1
+          fi
+
+          echo "SIM_UDID=$UDID" >> "$GITHUB_ENV"
+          echo "SIM_DEVICE=$DEVICE" >> "$GITHUB_ENV"
+          xcrun simctl boot "$UDID"
+          xcrun simctl bootstatus "$UDID" -b
+
+
+      - name: Build and install
+        run: |
+          DD="$RUNNER_TEMP/LocalLedgerScreenshotDD"
+          xcodebuild build \
+            -project apps/LocalLedger/LocalLedger.xcodeproj \
+            -scheme LocalLedger \
+            -configuration Debug \
+            -destination "platform=iOS Simulator,id=$SIM_UDID" \
+            -derivedDataPath "$DD" \
+            CODE_SIGNING_ALLOWED=NO
+
+          APP=$(find "$DD/Build/Products/Debug-iphonesimulator" -maxdepth 1 -name "LocalLedger.app" | head -1)
+          test -d "$APP"
+          xcrun simctl install "$SIM_UDID" "$APP"
+
+      - name: Capture clean screenshots
+        run: |
+          mkdir -p "$RUNNER_TEMP/screenshots"
+          BUNDLE="com.yosiken0421.localkakeibo"
+
+          xcrun simctl status_bar "$SIM_UDID" override \
+            --time "9:41" --batteryState charged --batteryLevel 100 --wifiBars 3 --cellularBars 4 || true
+
+          # First simulator launch can spend several seconds initializing SwiftUI.
+          # Warm it once so the first Store screenshot never captures a blank launch frame.
+          xcrun simctl launch "$SIM_UDID" "$BUNDLE" --demo-data --records-tab >/dev/null
+          sleep 7
+          xcrun simctl terminate "$SIM_UDID" "$BUNDLE" 2>/dev/null || true
+
+          capture () {
+            NAME="$1"
+            shift
+            xcrun simctl terminate "$SIM_UDID" "$BUNDLE" 2>/dev/null || true
+            xcrun simctl launch "$SIM_UDID" "$BUNDLE" --demo-data "$@" -AppleLanguages "(ja)" -AppleLocale "ja_JP"
+
+            # Simulator rendering can briefly show a blank frame after launch.
+            # Retry the same screen until it contains enough rendered UI detail.
+            for ATTEMPT in 1 2 3 4 5; do
+              sleep 3
+              xcrun simctl io "$SIM_UDID" screenshot "$RUNNER_TEMP/$NAME.png"
+              sips -s format jpeg -s formatOptions 95 "$RUNNER_TEMP/$NAME.png" --out "$RUNNER_TEMP/screenshots/$NAME.jpg" >/dev/null
+              BYTES=$(stat -f%z "$RUNNER_TEMP/screenshots/$NAME.jpg")
+              echo "$NAME attempt $ATTEMPT: $BYTES bytes"
+              if [ "$BYTES" -ge 120000 ]; then
+                return 0
+              fi
+            done
+
+            echo "::error::$NAME stayed blank or incomplete after retries"
+            return 1
+          }
+
+          capture "01-records" --records-tab
+          capture "02-insights" --analysis-tab
+          capture "03-settings" --settings-tab
+
+      - name: Verify App Store dimensions
+        run: |
+          for F in "$RUNNER_TEMP"/screenshots/*.jpg; do
+            W=$(sips -g pixelWidth "$F" | awk '/pixelWidth/{print $2}')
+            H=$(sips -g pixelHeight "$F" | awk '/pixelHeight/{print $2}')
+            echo "$(basename "$F"): ${W}x${H}"
+            case "${W}x${H}" in
+              1260x2736|1290x2796|1320x2868) ;;
+              *) echo "::error::Unexpected iPhone screenshot size: ${W}x${H}"; exit 1 ;;
+            esac
+            BYTES=$(stat -f%z "$F")
+            if [ "$BYTES" -lt 120000 ]; then
+              echo "::error::Screenshot looks blank or incomplete: $(basename "$F") (${BYTES} bytes)"
+              exit 1
+            fi
+          done
+
+      - name: Save screenshots
+        uses: actions/upload-artifact@v4
+        with:
+          name: LocalLedger-AppStore-Screenshots-${{ env.SIM_DEVICE }}
+          path: ${{ runner.temp }}/screenshots/*.jpg
+          retention-days: 14
