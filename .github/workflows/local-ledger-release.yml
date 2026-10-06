@@ -1,6 +1,12 @@
 name: LocalLedger Release / TestFlight
 
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - "apps/LocalLedger/**"
+      - ".github/workflows/local-ledger-release.yml"
   workflow_dispatch:
     inputs:
       release_mode:
