@@ -53,6 +53,7 @@ struct ContentView: View {
                 }
             }
             .navigationTitle("まいにち家計簿")
+            .accessibilityIdentifier("ledgerRoot")
             .searchable(text: $query, prompt: "メモ・カテゴリを検索")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
