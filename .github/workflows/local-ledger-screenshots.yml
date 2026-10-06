@@ -5,6 +5,7 @@ on:
     branches:
       - app/local-ledger-v1
     paths:
+      - "apps/LocalLedger/**"
       - ".github/workflows/local-ledger-screenshots.yml"
   workflow_dispatch:
 
