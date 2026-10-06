@@ -21,10 +21,9 @@ private struct RecordsView: View {
     @EnvironmentObject private var store: LedgerStore
     @State private var showingAdd = false
     @State private var showingDeleteAll = false
+    @State private var editingEntry: LedgerEntry?
     @State private var query = ""
     @State private var selectedMonth = Date()
-
-    private var calendar: Calendar { .current }
 
     private var summary: LedgerSummary {
         LedgerCalculator.monthlySummary(entries: store.entries, monthContaining: selectedMonth)
@@ -43,9 +42,14 @@ private struct RecordsView: View {
             List {
                 Section {
                     MonthPicker(selectedMonth: $selectedMonth)
+
                     SummaryView(summary: summary)
                         .listRowInsets(EdgeInsets())
                         .listRowBackground(Color.clear)
+
+                    if let budget = store.monthlyBudget {
+                        BudgetProgressView(budget: budget, expense: summary.expense)
+                    }
                 }
 
                 Section("記録") {
@@ -57,13 +61,17 @@ private struct RecordsView: View {
                         )
                     } else {
                         ForEach(visibleEntries) { entry in
-                            EntryRow(entry: entry)
-                        }
-                        .onDelete { offsets in
-                            let ids = Set(offsets.compactMap { index in
-                                visibleEntries.indices.contains(index) ? visibleEntries[index].id : nil
-                            })
-                            store.delete(ids: ids)
+                            Button {
+                                editingEntry = entry
+                            } label: {
+                                EntryRow(entry: entry)
+                            }
+                            .buttonStyle(.plain)
+                            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                                Button("削除", role: .destructive) {
+                                    store.delete(ids: [entry.id])
+                                }
+                            }
                         }
                     }
                 }
@@ -86,6 +94,9 @@ private struct RecordsView: View {
             }
             .sheet(isPresented: $showingAdd) {
                 AddEntryView().environmentObject(store)
+            }
+            .sheet(item: $editingEntry) { entry in
+                AddEntryView(entry: entry).environmentObject(store)
             }
             .confirmationDialog("すべての記録を削除しますか？", isPresented: $showingDeleteAll, titleVisibility: .visible) {
                 Button("すべて削除", role: .destructive) { store.deleteAll() }
@@ -110,8 +121,10 @@ private struct MonthPicker: View {
             .accessibilityLabel("前の月")
 
             Spacer()
+
             Text(selectedMonth, format: .dateTime.year().month())
                 .font(.headline)
+
             Spacer()
 
             Button {
@@ -128,6 +141,7 @@ private struct MonthPicker: View {
 
 private struct SummaryView: View {
     let summary: LedgerSummary
+
     var body: some View {
         HStack(spacing: 10) {
             SummaryCell(title: "収入", value: summary.income)
@@ -141,11 +155,17 @@ private struct SummaryView: View {
 private struct SummaryCell: View {
     let title: String
     let value: Int
+
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(title).font(.caption).foregroundStyle(.secondary)
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
             Text(value, format: .currency(code: "JPY").precision(.fractionLength(0)))
-                .font(.headline).minimumScaleFactor(0.55).lineLimit(1)
+                .font(.headline)
+                .minimumScaleFactor(0.55)
+                .lineLimit(1)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(10)
@@ -153,21 +173,65 @@ private struct SummaryCell: View {
     }
 }
 
+private struct BudgetProgressView: View {
+    let budget: Int
+    let expense: Int
+
+    private var remaining: Int { max(0, budget - expense) }
+    private var progress: Double {
+        guard budget > 0 else { return 0 }
+        return min(1, Double(expense) / Double(budget))
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("月予算")
+                    .font(.subheadline.weight(.semibold))
+                Spacer()
+                Text("残り \(remaining.formatted(.currency(code: "JPY").precision(.fractionLength(0))))")
+                    .font(.subheadline)
+            }
+
+            ProgressView(value: progress)
+
+            Text("予算 \(budget.formatted(.currency(code: "JPY").precision(.fractionLength(0)))) / 使用 \(expense.formatted(.currency(code: "JPY").precision(.fractionLength(0))))")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .accessibilityElement(children: .combine)
+    }
+}
+
 private struct EntryRow: View {
     let entry: LedgerEntry
+
     var body: some View {
         HStack {
             VStack(alignment: .leading, spacing: 4) {
-                Text(entry.category.label).font(.headline)
+                Text(entry.category.label)
+                    .font(.headline)
+
                 if !entry.memo.isEmpty {
-                    Text(entry.memo).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+                    Text(entry.memo)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
                 }
-                Text(entry.date, format: .dateTime.year().month().day()).font(.caption).foregroundStyle(.secondary)
+
+                Text(entry.date, format: .dateTime.year().month().day())
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
+
             Spacer()
+
             Text(entry.type == .expense ? -entry.amount : entry.amount,
                  format: .currency(code: "JPY").precision(.fractionLength(0)))
                 .font(.headline)
-        }.accessibilityElement(children: .combine)
+        }
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .combine)
+        .accessibilityHint("タップして編集")
     }
 }
