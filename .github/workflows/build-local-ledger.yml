@@ -37,4 +37,28 @@ jobs:
         run: swift test --package-path apps/LocalLedger/Core
       - name: Build app
         run: |
-          xcodebuild build             -project apps/LocalLedger/LocalLedger.xcodeproj             -scheme LocalLedger             -configuration Debug             -destination 'generic/platform=iOS Simulator'             -derivedDataPath "$RUNNER_TEMP/LocalLedgerDD"             CODE_SIGNING_ALLOWED=NO
+          xcodebuild build \
+            -project apps/LocalLedger/LocalLedger.xcodeproj \
+            -scheme LocalLedger \
+            -configuration Debug \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath "$RUNNER_TEMP/LocalLedgerDD" \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: UI smoke test
+        run: |
+          RUNTIME=$(xcrun simctl list runtimes -j | python3 -c "
+          import sys, json
+          rs=[r for r in json.load(sys.stdin)['runtimes'] if r.get('platform')=='iOS' and r.get('isAvailable')]
+          rs.sort(key=lambda r:[int(x) for x in r['version'].split('.')])
+          print(rs[-1]['identifier'] if rs else '')")
+          UDID=$(xcrun simctl create "LocalLedger CI" com.apple.CoreSimulator.SimDeviceType.iPhone-12-mini "$RUNTIME" 2>/dev/null || true)
+          if [ -z "$UDID" ]; then
+            UDID=$(xcrun simctl create "LocalLedger CI" com.apple.CoreSimulator.SimDeviceType.iPhone-16e "$RUNTIME")
+          fi
+          xcrun simctl boot "$UDID"
+          xcodebuild test \
+            -project apps/LocalLedger/LocalLedger.xcodeproj \
+            -scheme LocalLedger \
+            -destination "platform=iOS Simulator,id=$UDID" \
+            -derivedDataPath "$RUNNER_TEMP/LocalLedgerUITestDD"
