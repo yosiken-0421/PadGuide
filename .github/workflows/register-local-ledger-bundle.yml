@@ -1,0 +1,141 @@
+name: Register KakeiboLeaf Bundle ID
+
+on:
+  push:
+    branches:
+      - app/local-ledger-v1
+    paths:
+      - ".github/workflows/register-local-ledger-bundle.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  register:
+    runs-on: macos-26
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare App Store Connect key
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+        run: |
+          missing=""
+          for v in ASC_KEY_ID ASC_ISSUER_ID ASC_KEY_P8; do
+            [ -z "${!v}" ] && missing="$missing $v"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Missing repository secrets:$missing"
+            exit 1
+          fi
+
+          mkdir -p "$RUNNER_TEMP/asc"
+          chmod 700 "$RUNNER_TEMP/asc"
+
+          python3 - <<'PY'
+          import os, re, base64, sys
+          raw=os.environ["ASC_KEY_P8"]
+          body=re.sub(r"-----(BEGIN|END)[^-]*-----", "", raw)
+          body=re.sub(r"[^A-Za-z0-9+/=]", "", body)
+          try:
+              der=base64.b64decode(body + "=" * (-len(body) % 4))
+          except Exception:
+              der=b""
+          if len(der) < 100:
+              print("::error::ASC_KEY_P8 is invalid")
+              sys.exit(1)
+          b64=base64.b64encode(der).decode()
+          pem="-----BEGIN PRIVATE KEY-----\n" + "\n".join(b64[i:i+64] for i in range(0,len(b64),64)) + "\n-----END PRIVATE KEY-----\n"
+          path=os.path.join(os.environ["RUNNER_TEMP"],"asc","AuthKey.p8")
+          with open(path,"w") as f:
+              f.write(pem)
+          os.chmod(path,0o600)
+          PY
+
+          echo "ASC_KEY_ID_CLEAN=$(printf '%s' "$ASC_KEY_ID" | tr -d '[:space:]')" >> "$GITHUB_ENV"
+          echo "ASC_ISSUER_ID_CLEAN=$(printf '%s' "$ASC_ISSUER_ID" | tr -d '[:space:]')" >> "$GITHUB_ENV"
+
+      - name: Register bundle identifier if needed
+        env:
+          BUNDLE_IDENTIFIER: com.yosiken0421.localkakeibo
+          BUNDLE_NAME: KakeiboLeaf
+        run: |
+          python3 -m pip install --quiet pyjwt cryptography requests
+
+          python3 - <<'PY'
+          import json, os, time, sys
+          import jwt, requests
+
+          key_id=os.environ["ASC_KEY_ID_CLEAN"]
+          issuer=os.environ["ASC_ISSUER_ID_CLEAN"]
+          key_path=os.path.join(os.environ["RUNNER_TEMP"],"asc","AuthKey.p8")
+          identifier=os.environ["BUNDLE_IDENTIFIER"]
+          name=os.environ["BUNDLE_NAME"]
+
+          with open(key_path, "r") as f:
+              private_key=f.read()
+
+          now=int(time.time())
+          token=jwt.encode(
+              {"iss":issuer,"iat":now,"exp":now+900,"aud":"appstoreconnect-v1"},
+              private_key,
+              algorithm="ES256",
+              headers={"kid":key_id,"typ":"JWT"},
+          )
+
+          headers={"Authorization":f"Bearer {token}","Content-Type":"application/json"}
+          base="https://api.appstoreconnect.apple.com/v1"
+
+          response=requests.get(
+              f"{base}/bundleIds",
+              params={"filter[identifier]":identifier,"limit":"10"},
+              headers=headers,
+              timeout=30,
+          )
+          if response.status_code != 200:
+              print(f"::error::Bundle ID lookup failed: HTTP {response.status_code}")
+              print(response.text[:1500])
+              sys.exit(1)
+
+          data=response.json().get("data", [])
+          if data:
+              resource=data[0]
+              attrs=resource.get("attributes", {})
+              print(f"Bundle ID already registered: {attrs.get('identifier', identifier)}")
+              print(f"Resource ID: {resource.get('id')}")
+              sys.exit(0)
+
+          payload={
+              "data":{
+                  "type":"bundleIds",
+                  "attributes":{
+                      "name":name,
+                      "identifier":identifier,
+                      "platform":"IOS"
+                  }
+              }
+          }
+
+          response=requests.post(
+              f"{base}/bundleIds",
+              headers=headers,
+              data=json.dumps(payload),
+              timeout=30,
+          )
+          if response.status_code != 201:
+              print(f"::error::Bundle ID registration failed: HTTP {response.status_code}")
+              print(response.text[:1500])
+              sys.exit(1)
+
+          resource=response.json()["data"]
+          print(f"Registered Bundle ID: {resource['attributes']['identifier']}")
+          print(f"Resource ID: {resource['id']}")
+          PY
+
+      - name: Cleanup
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/asc"
