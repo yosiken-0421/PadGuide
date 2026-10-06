@@ -177,6 +177,165 @@ jobs:
               print("CATEGORY",json.dumps({"id":row["id"]},ensure_ascii=False))
           PY
 
+      - name: Configure KakeiboLeaf App Store metadata
+        env:
+          BUNDLE_ID: com.yosiken0421.localkakeibo
+        run: |
+          "$RUNNER_TEMP/asc/venv/bin/python" - <<'PY'
+          import os,time,sys,jwt,requests
+
+          APP_NAME="KakeiboLeaf"
+          APP_SUBTITLE="シンプルな収支記録を端末内で"
+          PRIVACY_URL="https://github.com/yosiken-0421/PadGuide/blob/main/apps/LocalLedger/PRIVACY.md"
+          SUPPORT_URL="https://github.com/yosiken-0421/PadGuide/blob/main/apps/LocalLedger/SUPPORT.md"
+          DESCRIPTION="""KakeiboLeafは、毎日の収入と支出を迷わずすぐ記録できるシンプルな家計簿です。
+
+金額・カテゴリ・日付・メモを入力すると、月ごとの収入、支出、残高を自動集計します。月予算を設定すると残り予算も確認できます。
+
+「分析」では直近6か月の支出推移とカテゴリ別支出を確認できます。記録の検索・編集・削除にも対応しています。
+
+家計簿データはiPhone内だけに保存されます。アカウント登録、広告、アクセス解析、トラッキング、外部クラウドへの送信はありません。"""
+          KEYWORDS="家計簿,収支,支出,収入,節約,お金,予算,記録,シンプル"
+
+          with open(os.path.join(os.environ["RUNNER_TEMP"],"asc","AuthKey.p8")) as f:
+              key=f.read()
+          now=int(time.time())
+          token=jwt.encode(
+              {"iss":os.environ["ASC_ISSUER_ID_CLEAN"],"iat":now,"exp":now+900,"aud":"appstoreconnect-v1"},
+              key,algorithm="ES256",
+              headers={"kid":os.environ["ASC_KEY_ID_CLEAN"],"typ":"JWT"},
+          )
+          H={"Authorization":f"Bearer {token}","Content-Type":"application/json"}
+          base="https://api.appstoreconnect.apple.com/v1"
+
+          def req(method,path,params=None,payload=None,ok=(200,201,204)):
+              r=requests.request(method,base+path,headers=H,params=params,json=payload,timeout=30)
+              print(f"{method} {path} -> {r.status_code}")
+              if r.status_code not in ok:
+                  print(r.text[:4000])
+                  sys.exit(1)
+              if r.status_code == 204 or not r.text.strip():
+                  return None
+              return r.json()
+
+          apps=req("GET","/apps",params={"filter[bundleId]":os.environ["BUNDLE_ID"],"limit":"10"})
+          app=apps["data"][0]
+          app_id=app["id"]
+
+          versions=req("GET",f"/apps/{app_id}/appStoreVersions",params={"filter[platform]":"IOS","limit":"50"})
+          version=next(x for x in versions["data"] if x.get("attributes",{}).get("versionString")=="1.0")
+          version_id=version["id"]
+
+          version_locs=req("GET",f"/appStoreVersions/{version_id}/appStoreVersionLocalizations",params={"limit":"50"})
+          version_loc=next(x for x in version_locs["data"] if x.get("attributes",{}).get("locale")=="ja")
+          version_loc_id=version_loc["id"]
+
+          infos=req("GET",f"/apps/{app_id}/appInfos",params={"limit":"10"})
+          info_id=infos["data"][0]["id"]
+
+          info_locs=req("GET",f"/appInfos/{info_id}/appInfoLocalizations",params={"limit":"50"})
+          info_loc=next(x for x in info_locs["data"] if x.get("attributes",{}).get("locale")=="ja")
+          info_loc_id=info_loc["id"]
+
+          builds=req("GET","/builds",params={"filter[app]":app_id,"filter[version]":"2002","limit":"10"})
+          build=next(x for x in builds["data"] if x.get("attributes",{}).get("processingState")=="VALID")
+          build_id=build["id"]
+
+          req("PATCH",f"/apps/{app_id}",payload={
+              "data":{
+                  "type":"apps",
+                  "id":app_id,
+                  "attributes":{"contentRightsDeclaration":"DOES_NOT_USE_THIRD_PARTY_CONTENT"}
+              }
+          })
+
+          req("PATCH",f"/appInfos/{info_id}",payload={
+              "data":{
+                  "type":"appInfos",
+                  "id":info_id,
+                  "relationships":{
+                      "primaryCategory":{"data":{"type":"appCategories","id":"FINANCE"}},
+                      "secondaryCategory":{"data":{"type":"appCategories","id":"UTILITIES"}}
+                  }
+              }
+          })
+
+          req("PATCH",f"/appInfoLocalizations/{info_loc_id}",payload={
+              "data":{
+                  "type":"appInfoLocalizations",
+                  "id":info_loc_id,
+                  "attributes":{
+                      "name":APP_NAME,
+                      "subtitle":APP_SUBTITLE,
+                      "privacyPolicyUrl":PRIVACY_URL
+                  }
+              }
+          })
+
+          req("PATCH",f"/appStoreVersionLocalizations/{version_loc_id}",payload={
+              "data":{
+                  "type":"appStoreVersionLocalizations",
+                  "id":version_loc_id,
+                  "attributes":{
+                      "description":DESCRIPTION,
+                      "keywords":KEYWORDS,
+                      "supportUrl":SUPPORT_URL
+                  }
+              }
+          })
+
+          req("PATCH",f"/appStoreVersions/{version_id}/relationships/build",payload={
+              "data":{"type":"builds","id":build_id}
+          },ok=(204,))
+
+          age=req("GET",f"/appInfos/{info_id}/ageRatingDeclaration")
+          age_id=age["data"]["id"]
+          req("PATCH",f"/ageRatingDeclarations/{age_id}",payload={
+              "data":{
+                  "type":"ageRatingDeclarations",
+                  "id":age_id,
+                  "attributes":{
+                      "advertising":False,
+                      "alcoholTobaccoOrDrugUseOrReferences":"NONE",
+                      "contests":"NONE",
+                      "gambling":False,
+                      "gamblingSimulated":"NONE",
+                      "gunsOrOtherWeapons":"NONE",
+                      "healthOrWellnessTopics":False,
+                      "lootBox":False,
+                      "medicalOrTreatmentInformation":"NONE",
+                      "messagingAndChat":False,
+                      "parentalControls":False,
+                      "profanityOrCrudeHumor":"NONE",
+                      "ageAssurance":False,
+                      "sexualContentGraphicAndNudity":"NONE",
+                      "sexualContentOrNudity":"NONE",
+                      "socialMedia":False,
+                      "socialMediaAgeRestricted":False,
+                      "horrorOrFearThemes":"NONE",
+                      "matureOrSuggestiveThemes":"NONE",
+                      "unrestrictedWebAccess":False,
+                      "userGeneratedContent":False,
+                      "violenceCartoonOrFantasy":"NONE",
+                      "violenceRealisticProlongedGraphicOrSadistic":"NONE",
+                      "violenceRealistic":"NONE",
+                      "ageRatingOverrideV2":"NONE",
+                      "koreaAgeRatingOverride":"NONE"
+                  }
+              }
+          })
+
+          check=req("GET",f"/appStoreVersions/{version_id}/build")
+          if check.get("data",{}).get("id") != build_id:
+              print("::error::Build association verification failed")
+              sys.exit(1)
+
+          print("KakeiboLeaf App Store configuration complete")
+          print("App ID:",app_id)
+          print("Version ID:",version_id)
+          print("Build ID:",build_id)
+          PY
+
       - name: Cleanup
         if: always()
         run: rm -rf "$RUNNER_TEMP/asc"
