@@ -56,6 +56,13 @@ jobs:
           xcrun simctl boot "$UDID"
           xcrun simctl bootstatus "$UDID" -b
 
+          # Store screenshots are Japanese, so force a stable Japanese locale.
+          xcrun simctl spawn "$UDID" defaults write NSGlobalDomain AppleLanguages -array ja
+          xcrun simctl spawn "$UDID" defaults write NSGlobalDomain AppleLocale -string ja_JP
+          xcrun simctl shutdown "$UDID"
+          xcrun simctl boot "$UDID"
+          xcrun simctl bootstatus "$UDID" -b
+
       - name: Build and install
         run: |
           DD="$RUNNER_TEMP/LocalLedgerScreenshotDD"
