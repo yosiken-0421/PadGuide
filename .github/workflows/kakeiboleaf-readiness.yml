@@ -1,0 +1,218 @@
+name: KakeiboLeaf Submission Readiness
+
+on:
+  push:
+    branches:
+      - app/local-ledger-v1
+    paths:
+      - ".github/workflows/kakeiboleaf-readiness.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  readiness:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare App Store Connect key
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/asc"
+          chmod 700 "$RUNNER_TEMP/asc"
+          python3 - <<'PY'
+          import os,re,base64,sys
+          for v in ("ASC_KEY_ID","ASC_ISSUER_ID","ASC_KEY_P8"):
+              if not os.environ.get(v):
+                  print(f"::error::Missing {v}")
+                  sys.exit(1)
+          raw=os.environ["ASC_KEY_P8"]
+          body=re.sub(r"-----(BEGIN|END)[^-]*-----","",raw)
+          body=re.sub(r"[^A-Za-z0-9+/=]","",body)
+          der=base64.b64decode(body + "=" * (-len(body) % 4))
+          if len(der)<100:
+              print("::error::Invalid private key")
+              sys.exit(1)
+          b64=base64.b64encode(der).decode()
+          pem="-----BEGIN PRIVATE KEY-----\n"+"\n".join(b64[i:i+64] for i in range(0,len(b64),64))+"\n-----END PRIVATE KEY-----\n"
+          p=os.path.join(os.environ["RUNNER_TEMP"],"asc","AuthKey.p8")
+          open(p,"w").write(pem)
+          os.chmod(p,0o600)
+          PY
+          echo "ASC_KEY_ID_CLEAN=$(printf '%s' "$ASC_KEY_ID" | tr -d '[:space:]')" >> "$GITHUB_ENV"
+          echo "ASC_ISSUER_ID_CLEAN=$(printf '%s' "$ASC_ISSUER_ID" | tr -d '[:space:]')" >> "$GITHUB_ENV"
+
+      - name: Audit submission readiness
+        env:
+          BUNDLE_ID: com.yosiken0421.localkakeibo
+          TARGET_VERSION: "1.0"
+          TARGET_BUILD: "2002"
+        run: |
+          python3 -m venv "$RUNNER_TEMP/asc/venv"
+          "$RUNNER_TEMP/asc/venv/bin/python" -m pip install --quiet pyjwt cryptography requests
+          "$RUNNER_TEMP/asc/venv/bin/python" - <<'PY'
+          import os,time,json,sys,jwt,requests
+
+          with open(os.path.join(os.environ["RUNNER_TEMP"],"asc","AuthKey.p8")) as f:
+              key=f.read()
+          now=int(time.time())
+          token=jwt.encode(
+              {"iss":os.environ["ASC_ISSUER_ID_CLEAN"],"iat":now,"exp":now+900,"aud":"appstoreconnect-v1"},
+              key,algorithm="ES256",
+              headers={"kid":os.environ["ASC_KEY_ID_CLEAN"],"typ":"JWT"},
+          )
+          H={"Authorization":f"Bearer {token}","Content-Type":"application/json"}
+          API1="https://api.appstoreconnect.apple.com/v1"
+          API2="https://api.appstoreconnect.apple.com/v2"
+
+          def get(url,params=None,allow=(200,)):
+              r=requests.get(url,headers=H,params=params or {},timeout=30)
+              print(f"GET {url.replace('https://api.appstoreconnect.apple.com','')} -> {r.status_code}")
+              if r.status_code not in allow:
+                  print(r.text[:3000])
+                  return None
+              if not r.text.strip():
+                  return {}
+              return r.json()
+
+          apps=get(API1+"/apps",{"filter[bundleId]":os.environ["BUNDLE_ID"],"limit":"10"})
+          if not apps or not apps.get("data"):
+              raise SystemExit("App not found")
+          app=apps["data"][0]
+          app_id=app["id"]
+          print("APP",json.dumps({
+              "id":app_id,
+              "name":app.get("attributes",{}).get("name"),
+              "bundleId":app.get("attributes",{}).get("bundleId"),
+              "sku":app.get("attributes",{}).get("sku"),
+              "contentRightsDeclaration":app.get("attributes",{}).get("contentRightsDeclaration"),
+          },ensure_ascii=False))
+
+          versions=get(API1+f"/apps/{app_id}/appStoreVersions",{
+              "filter[platform]":"IOS","limit":"50"
+          })
+          version=next(
+              x for x in versions.get("data",[])
+              if x.get("attributes",{}).get("versionString")==os.environ["TARGET_VERSION"]
+          )
+          version_id=version["id"]
+          vd=get(API1+f"/appStoreVersions/{version_id}",{
+              "fields[appStoreVersions]":"versionString,appStoreState,appVersionState,copyright,reviewType,releaseType,earliestReleaseDate,usesIdfa,downloadable,createdDate"
+          })
+          va=(vd or {}).get("data",{}).get("attributes",{})
+          print("VERSION_DETAIL",json.dumps(va,ensure_ascii=False))
+
+          build=get(API1+f"/appStoreVersions/{version_id}/build",allow=(200,404))
+          build_id=((build or {}).get("data") or {}).get("id")
+          print("VERSION_BUILD_ID",build_id)
+          if build_id:
+              bd=get(API1+f"/builds/{build_id}")
+              print("BUILD_DETAIL",json.dumps((bd or {}).get("data",{}).get("attributes",{}),ensure_ascii=False))
+
+          locs=get(API1+f"/appStoreVersions/{version_id}/appStoreVersionLocalizations",{"limit":"50"})
+          screenshot_total=0
+          for loc in (locs or {}).get("data",[]):
+              la=loc.get("attributes",{})
+              print("VERSION_LOCALIZATION",json.dumps({
+                  "locale":la.get("locale"),
+                  "description":bool(la.get("description")),
+                  "keywords":bool(la.get("keywords")),
+                  "supportUrl":la.get("supportUrl"),
+              },ensure_ascii=False))
+              sets=get(API1+f"/appStoreVersionLocalizations/{loc['id']}/appScreenshotSets",{"limit":"50"})
+              for ss in (sets or {}).get("data",[]):
+                  shots=get(API1+f"/appScreenshotSets/{ss['id']}/appScreenshots",{"limit":"50"})
+                  count=len((shots or {}).get("data",[]))
+                  screenshot_total+=count
+                  print("SCREENSHOT_SET",json.dumps({"id":ss["id"],"count":count},ensure_ascii=False))
+          print("SCREENSHOT_TOTAL",screenshot_total)
+
+          review=get(API1+f"/appStoreVersions/{version_id}/appStoreReviewDetail",allow=(200,404))
+          if review and review.get("data"):
+              ra=review["data"].get("attributes",{})
+              safe={
+                  "id":review["data"]["id"],
+                  "contactFirstNamePresent":bool(ra.get("contactFirstName")),
+                  "contactLastNamePresent":bool(ra.get("contactLastName")),
+                  "contactPhonePresent":bool(ra.get("contactPhone")),
+                  "contactEmailPresent":bool(ra.get("contactEmail")),
+                  "demoAccountRequired":ra.get("demoAccountRequired"),
+                  "demoAccountNamePresent":bool(ra.get("demoAccountName")),
+                  "demoAccountPasswordPresent":bool(ra.get("demoAccountPassword")),
+                  "notesPresent":bool(ra.get("notes")),
+              }
+              print("REVIEW_DETAIL",json.dumps(safe,ensure_ascii=False))
+          else:
+              print("REVIEW_DETAIL",None)
+
+          infos=get(API1+f"/apps/{app_id}/appInfos",{"limit":"10"})
+          for info in (infos or {}).get("data",[]):
+              print("APP_INFO_STATE",json.dumps(info.get("attributes",{}),ensure_ascii=False))
+              ilocs=get(API1+f"/appInfos/{info['id']}/appInfoLocalizations",{"limit":"50"})
+              for loc in (ilocs or {}).get("data",[]):
+                  a=loc.get("attributes",{})
+                  print("APP_INFO_LOCALIZATION",json.dumps({
+                      "locale":a.get("locale"),
+                      "name":a.get("name"),
+                      "subtitle":a.get("subtitle"),
+                      "privacyPolicyUrl":a.get("privacyPolicyUrl"),
+                  },ensure_ascii=False))
+              for rel in ("primaryCategory","secondaryCategory"):
+                  rr=get(API1+f"/appInfos/{info['id']}/relationships/{rel}")
+                  print(rel,((rr or {}).get("data") or {}).get("id"))
+
+          price=get(API1+f"/apps/{app_id}/appPriceSchedule",allow=(200,404))
+          if price and price.get("data"):
+              sid=price["data"]["id"]
+              bt=get(API1+f"/appPriceSchedules/{sid}/baseTerritory")
+              mp=get(API1+f"/appPriceSchedules/{sid}/manualPrices",{"limit":"50"})
+              print("PRICE",json.dumps({
+                  "scheduleId":sid,
+                  "baseTerritory":((bt or {}).get("data") or {}).get("id"),
+                  "manualPriceCount":len((mp or {}).get("data",[]))
+              },ensure_ascii=False))
+          else:
+              print("PRICE",None)
+
+          av=get(API1+f"/apps/{app_id}/appAvailabilityV2",allow=(200,404))
+          if av and av.get("data"):
+              aid=av["data"]["id"]
+              tr=get(API2+f"/appAvailabilities/{aid}/territoryAvailabilities",{
+                  "include":"territory","limit":"200"
+              })
+              available=[]
+              total=0
+              for row in (tr or {}).get("data",[]):
+                  total+=1
+                  if row.get("attributes",{}).get("available") is True:
+                      tid=(((row.get("relationships") or {}).get("territory") or {}).get("data") or {}).get("id")
+                      if tid: available.append(tid)
+              print("AVAILABILITY",json.dumps({
+                  "id":aid,
+                  "availableInNewTerritories":av["data"].get("attributes",{}).get("availableInNewTerritories"),
+                  "territoryCount":total,
+                  "availableTerritories":sorted(available),
+              },ensure_ascii=False))
+          else:
+              print("AVAILABILITY",None)
+
+          submissions=get(API1+f"/apps/{app_id}/reviewSubmissions",{"limit":"50"},allow=(200,404))
+          if submissions:
+              print("REVIEW_SUBMISSIONS",json.dumps([
+                  {"id":x["id"], **x.get("attributes",{})}
+                  for x in submissions.get("data",[])
+              ],ensure_ascii=False))
+
+          print("READINESS_AUDIT_COMPLETE")
+          PY
+
+      - name: Cleanup
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/asc"
