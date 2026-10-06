@@ -25,7 +25,9 @@ struct AddEntryView: View {
                         category = LedgerCategory.choices(for: newValue).first ?? .other
                     }
 
-                    TextField("金額", text: $amountText).keyboardType(.numberPad)
+                    TextField("金額", text: $amountText)
+                        .keyboardType(.numberPad)
+                        .accessibilityIdentifier("amountField")
 
                     Picker("カテゴリ", selection: $category) {
                         ForEach(LedgerCategory.choices(for: type)) { item in Text(item.label).tag(item) }
@@ -33,6 +35,7 @@ struct AddEntryView: View {
 
                     DatePicker("日付", selection: $date, displayedComponents: .date)
                     TextField("メモ（任意）", text: $memo)
+                        .accessibilityIdentifier("memoField")
                 }
             }
             .navigationTitle("収支を追加")
