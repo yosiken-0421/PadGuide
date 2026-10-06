@@ -64,9 +64,10 @@ jobs:
           BUNDLE_IDENTIFIER: com.yosiken0421.localkakeibo
           BUNDLE_NAME: KakeiboLeaf
         run: |
-          python3 -m pip install --quiet pyjwt cryptography requests
+          python3 -m venv "$RUNNER_TEMP/asc/venv"
+          "$RUNNER_TEMP/asc/venv/bin/python" -m pip install --quiet pyjwt cryptography requests
 
-          python3 - <<'PY'
+          "$RUNNER_TEMP/asc/venv/bin/python" - <<'PY'
           import json, os, time, sys
           import jwt, requests
 
