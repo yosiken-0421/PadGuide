@@ -108,7 +108,7 @@ private struct RecordsView: View {
                     }
                 }
             }
-            .navigationTitle("まいにち家計簿")
+            .navigationTitle("KakeiboLeaf")
             .searchable(text: $query, prompt: "メモ・カテゴリを検索")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
