@@ -174,6 +174,44 @@ jobs:
                       "attributes":age["data"].get("attributes",{})
                   },ensure_ascii=False,sort_keys=True))
 
+          price=get(
+              f"/apps/{app_id}/appPriceSchedule",
+              {
+                  "include":"baseTerritory,manualPrices,automaticPrices",
+                  "limit[manualPrices]":"50",
+                  "limit[automaticPrices]":"50"
+              },
+              allow=(200,404)
+          )
+          if price and price.get("data"):
+              print("PRICE_SCHEDULE",json.dumps(price["data"],ensure_ascii=False))
+          else:
+              print("PRICE_SCHEDULE",None)
+
+          availability=get(
+              f"/apps/{app_id}/appAvailabilityV2",
+              {
+                  "include":"territoryAvailabilities",
+                  "limit[territoryAvailabilities]":"50"
+              },
+              allow=(200,404)
+          )
+          if availability and availability.get("data"):
+              av=availability["data"]
+              attrs=av.get("attributes",{})
+              included=availability.get("included",[])
+              available=sum(1 for x in included if x.get("attributes",{}).get("available") is True)
+              unavailable=sum(1 for x in included if x.get("attributes",{}).get("available") is False)
+              print("APP_AVAILABILITY",json.dumps({
+                  "id":av.get("id"),
+                  "availableInNewTerritories":attrs.get("availableInNewTerritories"),
+                  "includedCount":len(included),
+                  "availableIncluded":available,
+                  "unavailableIncluded":unavailable
+              },ensure_ascii=False))
+          else:
+              print("APP_AVAILABILITY",None)
+
           cats=get("/appCategories",{"filter[platforms]":"IOS","exists[parent]":"false","limit":"200"})
           for row in (cats or {}).get("data",[]):
               print("CATEGORY",json.dumps({"id":row["id"]},ensure_ascii=False))
