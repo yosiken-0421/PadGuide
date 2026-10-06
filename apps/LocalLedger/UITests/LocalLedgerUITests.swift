@@ -8,7 +8,7 @@ final class LocalLedgerUITests: XCTestCase {
     func testLaunchAndAddExpense() {
         let app = XCUIApplication()
         app.launch()
-        XCTAssertTrue(app.navigationBars["まいにち家計簿"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.navigationBars["KakeiboLeaf"].waitForExistence(timeout: 10))
 
         let add = app.buttons["addEntryButton"]
         XCTAssertTrue(add.waitForExistence(timeout: 5))
