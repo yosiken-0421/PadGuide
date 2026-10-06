@@ -39,9 +39,9 @@ print("App ID:",app_id)
 # ----- Price: free, Japan as base territory -----
 price=req("GET",f"{API1}/apps/{app_id}/appPriceSchedule",ok=(200,))
 schedule_id=price["data"]["id"]
-manual=req("GET",f"{API1}/appPriceSchedules/{schedule_id}/manualPrices",params={"limit":"50"},ok=(200,))
+manual=req("GET",f"{API1}/appPriceSchedules/{schedule_id}/manualPrices",params={"limit":"50"},ok=(200,404))
 
-if manual.get("data"):
+if manual and manual.get("data"):
     print("Manual app price already configured:",[x["id"] for x in manual["data"]])
 else:
     points=req(
