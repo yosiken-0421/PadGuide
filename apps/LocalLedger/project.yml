@@ -26,6 +26,9 @@ targets:
         PRODUCT_NAME: LocalLedger
         PRODUCT_BUNDLE_IDENTIFIER: com.yosiken0421.localkakeibo
         TARGETED_DEVICE_FAMILY: "1"
+    scheme:
+      testTargets:
+        - LocalLedgerUITests
     info:
       path: App/Info.plist
       properties:
@@ -35,3 +38,16 @@ targets:
         UILaunchScreen: {}
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
         ITSAppUsesNonExemptEncryption: false
+
+  LocalLedgerUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - UITests
+    dependencies:
+      - target: LocalLedger
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.yosiken0421.localkakeibo.uitests
+        GENERATE_INFOPLIST_FILE: YES
+        TARGETED_DEVICE_FAMILY: "1"
