@@ -1,17 +1,41 @@
 import SwiftUI
 import LocalLedgerCore
 
+private enum RootTab: Hashable {
+    case records
+    case insights
+    case settings
+}
+
 struct ContentView: View {
+    @State private var selectedTab: RootTab
+
+    init() {
+        let arguments = ProcessInfo.processInfo.arguments
+        let initial: RootTab
+        if arguments.contains("--analysis-tab") {
+            initial = .insights
+        } else if arguments.contains("--settings-tab") {
+            initial = .settings
+        } else {
+            initial = .records
+        }
+        _selectedTab = State(initialValue: initial)
+    }
+
     var body: some View {
-        TabView {
+        TabView(selection: $selectedTab) {
             RecordsView()
                 .tabItem { Label("記録", systemImage: "list.bullet.rectangle") }
+                .tag(RootTab.records)
 
             InsightsView()
                 .tabItem { Label("分析", systemImage: "chart.bar") }
+                .tag(RootTab.insights)
 
             SettingsView()
                 .tabItem { Label("設定", systemImage: "gearshape") }
+                .tag(RootTab.settings)
         }
         .accessibilityIdentifier("ledgerRoot")
     }

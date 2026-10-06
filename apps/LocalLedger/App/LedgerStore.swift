@@ -22,6 +22,12 @@ final class LedgerStore: ObservableObject {
         self.fileURL = fileURL ?? directory.appendingPathComponent("ledger.json")
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         load()
+
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("--demo-data") {
+            loadDemoData()
+        }
+        #endif
     }
 
     func add(_ entry: LedgerEntry) {
@@ -89,6 +95,41 @@ final class LedgerStore: ObservableObject {
         entries = []
         monthlyBudget = nil
     }
+
+    #if DEBUG
+    private func loadDemoData() {
+        let calendar = Calendar.current
+
+        func date(monthOffset: Int, day: Int) -> Date {
+            let shifted = calendar.date(byAdding: .month, value: monthOffset, to: Date()) ?? Date()
+            var components = calendar.dateComponents([.year, .month], from: shifted)
+            components.day = day
+            components.hour = 12
+            return calendar.date(from: components) ?? shifted
+        }
+
+        entries = [
+            LedgerEntry(date: date(monthOffset: 0, day: 25), type: .income, category: .salary, amount: 280_000, memo: "給与"),
+            LedgerEntry(date: date(monthOffset: 0, day: 24), type: .expense, category: .housing, amount: 68_000, memo: "家賃"),
+            LedgerEntry(date: date(monthOffset: 0, day: 20), type: .expense, category: .food, amount: 4_860, memo: "スーパー"),
+            LedgerEntry(date: date(monthOffset: 0, day: 18), type: .expense, category: .transport, amount: 3_200, memo: "交通費"),
+            LedgerEntry(date: date(monthOffset: 0, day: 12), type: .expense, category: .daily, amount: 2_480, memo: "日用品"),
+            LedgerEntry(date: date(monthOffset: 0, day: 8), type: .expense, category: .leisure, amount: 5_500, memo: "休日"),
+            LedgerEntry(date: date(monthOffset: -1, day: 18), type: .expense, category: .food, amount: 31_400, memo: "食費"),
+            LedgerEntry(date: date(monthOffset: -1, day: 10), type: .expense, category: .housing, amount: 68_000, memo: "家賃"),
+            LedgerEntry(date: date(monthOffset: -2, day: 18), type: .expense, category: .food, amount: 29_700, memo: "食費"),
+            LedgerEntry(date: date(monthOffset: -2, day: 10), type: .expense, category: .housing, amount: 68_000, memo: "家賃"),
+            LedgerEntry(date: date(monthOffset: -3, day: 18), type: .expense, category: .food, amount: 34_100, memo: "食費"),
+            LedgerEntry(date: date(monthOffset: -3, day: 10), type: .expense, category: .housing, amount: 68_000, memo: "家賃"),
+            LedgerEntry(date: date(monthOffset: -4, day: 18), type: .expense, category: .food, amount: 27_800, memo: "食費"),
+            LedgerEntry(date: date(monthOffset: -4, day: 10), type: .expense, category: .housing, amount: 68_000, memo: "家賃"),
+            LedgerEntry(date: date(monthOffset: -5, day: 18), type: .expense, category: .food, amount: 30_900, memo: "食費"),
+            LedgerEntry(date: date(monthOffset: -5, day: 10), type: .expense, category: .housing, amount: 68_000, memo: "家賃")
+        ]
+        monthlyBudget = 100_000
+        sortEntries()
+    }
+    #endif
 
     private func save() {
         let payload = StoredLedger(entries: entries, monthlyBudget: monthlyBudget)
