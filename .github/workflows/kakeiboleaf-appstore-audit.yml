@@ -142,10 +142,32 @@ jobs:
           infos=get(f"/apps/{app_id}/appInfos",{"limit":"10"})
           for row in (infos or {}).get("data",[]):
               a=row.get("attributes",{})
+              info_id=row["id"]
               print("APP_INFO",json.dumps({
-                  "id":row["id"],
+                  "id":info_id,
                   "appStoreState":a.get("appStoreState"),
               },ensure_ascii=False))
+
+              info_locs=get(f"/appInfos/{info_id}/appInfoLocalizations",{"limit":"50"})
+              for loc in (info_locs or {}).get("data",[]):
+                  la=loc.get("attributes",{})
+                  print("APP_INFO_LOCALIZATION",json.dumps({
+                      "id":loc["id"],
+                      "locale":la.get("locale"),
+                      "name":la.get("name"),
+                      "subtitle":la.get("subtitle"),
+                      "privacyPolicyUrl":la.get("privacyPolicyUrl"),
+                      "privacyChoicesUrl":la.get("privacyChoicesUrl"),
+                  },ensure_ascii=False))
+
+              for rel_name in ("primaryCategory","secondaryCategory"):
+                  rel=get(f"/appInfos/{info_id}/relationships/{rel_name}")
+                  rid=((rel or {}).get("data") or {}).get("id")
+                  print(f"APP_INFO_{rel_name.upper()}_ID",rid)
+
+          cats=get("/appCategories",{"filter[platforms]":"IOS","exists[parent]":"false","limit":"200"})
+          for row in (cats or {}).get("data",[]):
+              print("CATEGORY",json.dumps({"id":row["id"]},ensure_ascii=False))
           PY
 
       - name: Cleanup
