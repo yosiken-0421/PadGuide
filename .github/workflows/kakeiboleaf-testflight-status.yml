@@ -1,0 +1,127 @@
+name: KakeiboLeaf TestFlight Status
+
+on:
+  push:
+    branches:
+      - app/local-ledger-v1
+    paths:
+      - ".github/workflows/kakeiboleaf-testflight-status.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  status:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare App Store Connect key
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+        run: |
+          missing=""
+          for v in ASC_KEY_ID ASC_ISSUER_ID ASC_KEY_P8; do
+            [ -z "${!v}" ] && missing="$missing $v"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Missing repository secrets:$missing"
+            exit 1
+          fi
+          mkdir -p "$RUNNER_TEMP/asc"
+          chmod 700 "$RUNNER_TEMP/asc"
+          python3 - <<'PY'
+          import os,re,base64,sys
+          raw=os.environ["ASC_KEY_P8"]
+          body=re.sub(r"-----(BEGIN|END)[^-]*-----","",raw)
+          body=re.sub(r"[^A-Za-z0-9+/=]","",body)
+          der=base64.b64decode(body + "=" * (-len(body) % 4))
+          if len(der) < 100:
+              print("::error::Invalid ASC private key")
+              sys.exit(1)
+          b64=base64.b64encode(der).decode()
+          pem="-----BEGIN PRIVATE KEY-----\n" + "\n".join(b64[i:i+64] for i in range(0,len(b64),64)) + "\n-----END PRIVATE KEY-----\n"
+          path=os.path.join(os.environ["RUNNER_TEMP"],"asc","AuthKey.p8")
+          open(path,"w").write(pem)
+          os.chmod(path,0o600)
+          PY
+          echo "ASC_KEY_ID_CLEAN=$(printf '%s' "$ASC_KEY_ID" | tr -d '[:space:]')" >> "$GITHUB_ENV"
+          echo "ASC_ISSUER_ID_CLEAN=$(printf '%s' "$ASC_ISSUER_ID" | tr -d '[:space:]')" >> "$GITHUB_ENV"
+
+      - name: Check KakeiboLeaf build 2002
+        env:
+          BUNDLE_ID: com.yosiken0421.localkakeibo
+          TARGET_BUILD: "2002"
+        run: |
+          python3 -m venv "$RUNNER_TEMP/asc/venv"
+          "$RUNNER_TEMP/asc/venv/bin/python" -m pip install --quiet pyjwt cryptography requests
+          "$RUNNER_TEMP/asc/venv/bin/python" - <<'PY'
+          import os,time,sys,jwt,requests
+
+          with open(os.path.join(os.environ["RUNNER_TEMP"],"asc","AuthKey.p8")) as f:
+              key=f.read()
+          now=int(time.time())
+          token=jwt.encode(
+              {"iss":os.environ["ASC_ISSUER_ID_CLEAN"],"iat":now,"exp":now+900,"aud":"appstoreconnect-v1"},
+              key,algorithm="ES256",
+              headers={"kid":os.environ["ASC_KEY_ID_CLEAN"],"typ":"JWT"},
+          )
+          H={"Authorization":f"Bearer {token}"}
+          base="https://api.appstoreconnect.apple.com/v1"
+
+          apps=requests.get(base+"/apps",headers=H,params={"filter[bundleId]":os.environ["BUNDLE_ID"],"limit":"10"},timeout=30)
+          if apps.status_code != 200:
+              print(f"::error::App lookup failed HTTP {apps.status_code}")
+              print(apps.text[:1000])
+              sys.exit(1)
+          data=apps.json().get("data",[])
+          if not data:
+              print("::error::KakeiboLeaf app record not found in App Store Connect")
+              sys.exit(1)
+          app_id=data[0]["id"]
+          name=data[0].get("attributes",{}).get("name","KakeiboLeaf")
+          print(f"App Store Connect app found: {name}")
+          print(f"App ID: {app_id}")
+
+          builds=requests.get(
+              base+"/builds",
+              headers=H,
+              params={
+                  "filter[app]":app_id,
+                  "filter[version]":os.environ["TARGET_BUILD"],
+                  "limit":"10",
+                  "sort":"-uploadedDate",
+              },
+              timeout=30,
+          )
+          if builds.status_code != 200:
+              print(f"::error::Build lookup failed HTTP {builds.status_code}")
+              print(builds.text[:1000])
+              sys.exit(1)
+          rows=builds.json().get("data",[])
+          if not rows:
+              print(f"Build {os.environ['TARGET_BUILD']} is not visible yet (still ingesting).")
+              sys.exit(2)
+
+          a=rows[0].get("attributes",{})
+          state=a.get("processingState","UNKNOWN")
+          version=a.get("version","")
+          uploaded=a.get("uploadedDate","")
+          expired=a.get("expired",False)
+          print(f"Build: {version}")
+          print(f"Processing state: {state}")
+          print(f"Uploaded: {uploaded}")
+          print(f"Expired: {expired}")
+          if state != "VALID":
+              print(f"Build is not ready yet: {state}")
+              sys.exit(2)
+          print("KakeiboLeaf build 2002 is VALID and ready in App Store Connect/TestFlight.")
+          PY
+
+      - name: Cleanup
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/asc"
