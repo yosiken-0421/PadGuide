@@ -1,4 +1,4 @@
-# まいにち家計簿 / LocalLedger
+# KakeiboLeaf / LocalLedger
 
 第三者のゲーム・商標・画像・外部サービスに依存しない、iPhone向けのローカル家計簿です。
 
