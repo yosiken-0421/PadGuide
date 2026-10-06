@@ -6,10 +6,12 @@ on:
       - app/local-ledger-v1
     paths:
       - ".github/workflows/kakeiboleaf-appstore-audit.yml"
+      - "apps/LocalLedger/scripts/upload_appstore_screenshots.py"
   workflow_dispatch:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   audit:
@@ -332,6 +334,22 @@ jobs:
           print("Version ID:",version_id)
           print("Build ID:",build_id)
           PY
+
+      - name: Download generated App Store screenshots
+        uses: actions/download-artifact@v4
+        with:
+          name: LocalLedger-AppStore-Screenshots-iPhone-17-Pro-Max
+          path: ${{ runner.temp }}/store-shots
+          github-token: ${{ github.token }}
+          repository: yosiken-0421/PadGuide
+          run-id: 37432999826
+
+      - name: Upload App Store screenshots
+        env:
+          ASC_KEY_PATH: ${{ runner.temp }}/asc/AuthKey.p8
+          SCREENSHOT_DIR: ${{ runner.temp }}/store-shots
+        run: |
+          "$RUNNER_TEMP/asc/venv/bin/python" apps/LocalLedger/scripts/upload_appstore_screenshots.py
 
       - name: Cleanup
         if: always()
