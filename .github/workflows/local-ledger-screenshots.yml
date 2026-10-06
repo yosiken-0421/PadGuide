@@ -96,9 +96,22 @@ jobs:
             shift
             xcrun simctl terminate "$SIM_UDID" "$BUNDLE" 2>/dev/null || true
             xcrun simctl launch "$SIM_UDID" "$BUNDLE" --demo-data "$@" -AppleLanguages "(ja)" -AppleLocale "ja_JP"
-            sleep 3
-            xcrun simctl io "$SIM_UDID" screenshot "$RUNNER_TEMP/$NAME.png"
-            sips -s format jpeg -s formatOptions 95 "$RUNNER_TEMP/$NAME.png" --out "$RUNNER_TEMP/screenshots/$NAME.jpg" >/dev/null
+
+            # Simulator rendering can briefly show a blank frame after launch.
+            # Retry the same screen until it contains enough rendered UI detail.
+            for ATTEMPT in 1 2 3 4 5; do
+              sleep 3
+              xcrun simctl io "$SIM_UDID" screenshot "$RUNNER_TEMP/$NAME.png"
+              sips -s format jpeg -s formatOptions 95 "$RUNNER_TEMP/$NAME.png" --out "$RUNNER_TEMP/screenshots/$NAME.jpg" >/dev/null
+              BYTES=$(stat -f%z "$RUNNER_TEMP/screenshots/$NAME.jpg")
+              echo "$NAME attempt $ATTEMPT: $BYTES bytes"
+              if [ "$BYTES" -ge 120000 ]; then
+                return 0
+              fi
+            done
+
+            echo "::error::$NAME stayed blank or incomplete after retries"
+            return 1
           }
 
           capture "01-records" --records-tab
