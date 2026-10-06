@@ -1,0 +1,254 @@
+name: Configure KakeiboLeaf App Store Metadata
+
+on:
+  push:
+    branches:
+      - app/local-ledger-v1
+    paths:
+      - ".github/workflows/kakeiboleaf-appstore-configure.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  configure:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare App Store Connect key
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/asc"
+          chmod 700 "$RUNNER_TEMP/asc"
+          python3 - <<'PY'
+          import os,re,base64,sys
+          for v in ("ASC_KEY_ID","ASC_ISSUER_ID","ASC_KEY_P8"):
+              if not os.environ.get(v):
+                  print(f"::error::Missing {v}")
+                  sys.exit(1)
+          raw=os.environ["ASC_KEY_P8"]
+          body=re.sub(r"-----(BEGIN|END)[^-]*-----","",raw)
+          body=re.sub(r"[^A-Za-z0-9+/=]","",body)
+          der=base64.b64decode(body + "=" * (-len(body) % 4))
+          if len(der) < 100:
+              print("::error::Invalid ASC private key")
+              sys.exit(1)
+          b64=base64.b64encode(der).decode()
+          pem="-----BEGIN PRIVATE KEY-----\n" + "\n".join(b64[i:i+64] for i in range(0,len(b64),64)) + "\n-----END PRIVATE KEY-----\n"
+          path=os.path.join(os.environ["RUNNER_TEMP"],"asc","AuthKey.p8")
+          open(path,"w").write(pem)
+          os.chmod(path,0o600)
+          PY
+          echo "ASC_KEY_ID_CLEAN=$(printf '%s' "$ASC_KEY_ID" | tr -d '[:space:]')" >> "$GITHUB_ENV"
+          echo "ASC_ISSUER_ID_CLEAN=$(printf '%s' "$ASC_ISSUER_ID" | tr -d '[:space:]')" >> "$GITHUB_ENV"
+
+      - name: Configure metadata, categories, rights, age rating and build
+        env:
+          BUNDLE_ID: com.yosiken0421.localkakeibo
+          APP_VERSION: "1.0"
+          BUILD_NUMBER: "2002"
+          APP_NAME: KakeiboLeaf
+          APP_SUBTITLE: シンプルな収支記録を端末内で
+          PRIVACY_URL: https://github.com/yosiken-0421/PadGuide/blob/main/apps/LocalLedger/PRIVACY.md
+          SUPPORT_URL: https://github.com/yosiken-0421/PadGuide/blob/main/apps/LocalLedger/SUPPORT.md
+        run: |
+          python3 -m venv "$RUNNER_TEMP/asc/venv"
+          "$RUNNER_TEMP/asc/venv/bin/python" -m pip install --quiet pyjwt cryptography requests
+
+          "$RUNNER_TEMP/asc/venv/bin/python" - <<'PY'
+          import os,time,sys,jwt,requests,json
+
+          DESCRIPTION = """KakeiboLeafは、毎日の収入と支出を迷わずすぐ記録できるシンプルな家計簿です。
+
+金額・カテゴリ・日付・メモを入力すると、月ごとの収入、支出、残高を自動集計します。月予算を設定すると残り予算も確認できます。
+
+「分析」では直近6か月の支出推移とカテゴリ別支出を確認できます。記録の検索・編集・削除にも対応しています。
+
+家計簿データはiPhone内だけに保存されます。アカウント登録、広告、アクセス解析、トラッキング、外部クラウドへの送信はありません。"""
+          KEYWORDS = "家計簿,収支,支出,収入,節約,お金,予算,記録,シンプル"
+
+          with open(os.path.join(os.environ["RUNNER_TEMP"],"asc","AuthKey.p8")) as f:
+              key=f.read()
+          now=int(time.time())
+          token=jwt.encode(
+              {"iss":os.environ["ASC_ISSUER_ID_CLEAN"],"iat":now,"exp":now+900,"aud":"appstoreconnect-v1"},
+              key,algorithm="ES256",
+              headers={"kid":os.environ["ASC_KEY_ID_CLEAN"],"typ":"JWT"},
+          )
+          H={"Authorization":f"Bearer {token}","Content-Type":"application/json"}
+          base="https://api.appstoreconnect.apple.com/v1"
+
+          def request(method,path,params=None,payload=None,ok=(200,201,204)):
+              r=requests.request(method,base+path,headers=H,params=params,json=payload,timeout=30)
+              print(f"{method} {path} -> {r.status_code}")
+              if r.status_code not in ok:
+                  print(r.text[:4000])
+                  sys.exit(1)
+              if r.status_code == 204 or not r.text.strip():
+                  return None
+              return r.json()
+
+          apps=request("GET","/apps",params={"filter[bundleId]":os.environ["BUNDLE_ID"],"limit":"10"})
+          if not apps.get("data"):
+              print("::error::App not found")
+              sys.exit(1)
+          app=apps["data"][0]
+          app_id=app["id"]
+
+          versions=request("GET",f"/apps/{app_id}/appStoreVersions",params={"filter[platform]":"IOS","filter[versionString]":os.environ["APP_VERSION"],"limit":"10"})
+          if not versions.get("data"):
+              print("::error::App Store version not found")
+              sys.exit(1)
+          version=versions["data"][0]
+          version_id=version["id"]
+
+          version_locs=request("GET",f"/appStoreVersions/{version_id}/appStoreVersionLocalizations",params={"limit":"50"})
+          ja_version_loc=next((x for x in version_locs.get("data",[]) if x.get("attributes",{}).get("locale")=="ja"),None)
+          if not ja_version_loc:
+              print("::error::Japanese version localization not found")
+              sys.exit(1)
+          version_loc_id=ja_version_loc["id"]
+
+          infos=request("GET",f"/apps/{app_id}/appInfos",params={"limit":"10"})
+          if not infos.get("data"):
+              print("::error::App info not found")
+              sys.exit(1)
+          info_id=infos["data"][0]["id"]
+
+          info_locs=request("GET",f"/appInfos/{info_id}/appInfoLocalizations",params={"limit":"50"})
+          ja_info_loc=next((x for x in info_locs.get("data",[]) if x.get("attributes",{}).get("locale")=="ja"),None)
+          if not ja_info_loc:
+              print("::error::Japanese app info localization not found")
+              sys.exit(1)
+          info_loc_id=ja_info_loc["id"]
+
+          builds=request("GET","/builds",params={
+              "filter[app]":app_id,
+              "filter[version]":os.environ["BUILD_NUMBER"],
+              "limit":"10"
+          })
+          valid=[x for x in builds.get("data",[]) if x.get("attributes",{}).get("processingState")=="VALID"]
+          if not valid:
+              print("::error::Target build is not VALID")
+              sys.exit(1)
+          build_id=valid[0]["id"]
+
+          # App-level rights declaration.
+          request("PATCH",f"/apps/{app_id}",payload={
+              "data":{
+                  "type":"apps",
+                  "id":app_id,
+                  "attributes":{"contentRightsDeclaration":"DOES_NOT_USE_THIRD_PARTY_CONTENT"}
+              }
+          })
+
+          # Finance primary, Utilities secondary.
+          request("PATCH",f"/appInfos/{info_id}",payload={
+              "data":{
+                  "type":"appInfos",
+                  "id":info_id,
+                  "relationships":{
+                      "primaryCategory":{"data":{"type":"appCategories","id":"FINANCE"}},
+                      "secondaryCategory":{"data":{"type":"appCategories","id":"UTILITIES"}}
+                  }
+              }
+          })
+
+          # App-level localized metadata.
+          request("PATCH",f"/appInfoLocalizations/{info_loc_id}",payload={
+              "data":{
+                  "type":"appInfoLocalizations",
+                  "id":info_loc_id,
+                  "attributes":{
+                      "name":os.environ["APP_NAME"],
+                      "subtitle":os.environ["APP_SUBTITLE"],
+                      "privacyPolicyUrl":os.environ["PRIVACY_URL"]
+                  }
+              }
+          })
+
+          # Version localized metadata.
+          request("PATCH",f"/appStoreVersionLocalizations/{version_loc_id}",payload={
+              "data":{
+                  "type":"appStoreVersionLocalizations",
+                  "id":version_loc_id,
+                  "attributes":{
+                      "description":DESCRIPTION,
+                      "keywords":KEYWORDS,
+                      "supportUrl":os.environ["SUPPORT_URL"]
+                  }
+              }
+          })
+
+          # Attach build 2002 to App Store version 1.0.
+          request("PATCH",f"/appStoreVersions/{version_id}/relationships/build",payload={
+              "data":{"type":"builds","id":build_id}
+          },ok=(204,))
+
+          # This app contains none of the age-rating content/capabilities below.
+          age=request("GET",f"/appInfos/{info_id}/ageRatingDeclaration")
+          age_id=age["data"]["id"]
+          attrs={
+              "advertising":False,
+              "alcoholTobaccoOrDrugUseOrReferences":"NONE",
+              "contests":"NONE",
+              "gambling":False,
+              "gamblingSimulated":"NONE",
+              "gunsOrOtherWeapons":"NONE",
+              "healthOrWellnessTopics":False,
+              "lootBox":False,
+              "medicalOrTreatmentInformation":"NONE",
+              "messagingAndChat":False,
+              "parentalControls":False,
+              "profanityOrCrudeHumor":"NONE",
+              "ageAssurance":False,
+              "sexualContentGraphicAndNudity":"NONE",
+              "sexualContentOrNudity":"NONE",
+              "socialMedia":False,
+              "socialMediaAgeRestricted":False,
+              "horrorOrFearThemes":"NONE",
+              "matureOrSuggestiveThemes":"NONE",
+              "unrestrictedWebAccess":False,
+              "userGeneratedContent":False,
+              "violenceCartoonOrFantasy":"NONE",
+              "violenceRealisticProlongedGraphicOrSadistic":"NONE",
+              "violenceRealistic":"NONE",
+              "ageRatingOverrideV2":"NONE",
+              "koreaAgeRatingOverride":"NONE"
+          }
+          request("PATCH",f"/ageRatingDeclarations/{age_id}",payload={
+              "data":{"type":"ageRatingDeclarations","id":age_id,"attributes":attrs}
+          })
+
+          # Verify key fields.
+          check_loc=request("GET",f"/appStoreVersionLocalizations/{version_loc_id}")
+          a=check_loc["data"]["attributes"]
+          assert a.get("description")==DESCRIPTION
+          assert a.get("keywords")==KEYWORDS
+          assert a.get("supportUrl")==os.environ["SUPPORT_URL"]
+
+          check_info=request("GET",f"/appInfoLocalizations/{info_loc_id}")
+          ia=check_info["data"]["attributes"]
+          assert ia.get("name")==os.environ["APP_NAME"]
+          assert ia.get("subtitle")==os.environ["APP_SUBTITLE"]
+          assert ia.get("privacyPolicyUrl")==os.environ["PRIVACY_URL"]
+
+          check_build=request("GET",f"/appStoreVersions/{version_id}/build")
+          assert check_build.get("data",{}).get("id")==build_id
+
+          print("KakeiboLeaf App Store metadata configured.")
+          print("App ID:",app_id)
+          print("Version ID:",version_id)
+          print("Build ID:",build_id)
+          PY
+
+      - name: Cleanup
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/asc"
