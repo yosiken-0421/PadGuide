@@ -103,6 +103,19 @@ final class SampleHandler: RPBroadcastSampleHandler {
         badFrames = 0
         lastGoodFrame = t
 
+        // 盤面の位置の見直し（約3秒ごと）：もっとはっきり読める位置があれば切り替える
+        // （最初に盤面の上の表示を盤面と間違えて、数段ずれたまま読み続けることを防ぐ）
+        if t - lastDetect > 3 {
+            lastDetect = t
+            if let better = BoardDetector.detect(src, fixedSize: settings.fixedSize, classifier: classifier),
+               Self.differs(better.rect, r),
+               BoardDetector.quality(better) > BoardDetector.quality(reading) + 0.03 {
+                rect = better.rect
+                session.forceNextSolve()
+                return
+            }
+        }
+
         // 雲・ルーレットに指定したマスは見ない（色が変わり続けても、盤面が変わったとみなさない）
         let ignored = settings.constraints?.effective(for: r.size)?.hidden ?? []
         session.setIgnored(ignored)
@@ -157,6 +170,11 @@ final class SampleHandler: RPBroadcastSampleHandler {
             self.publish(msg, reading: reading, progress: msg.status == "ok" ? 0 : nil)
             self.hasResult = true
         }
+    }
+
+    /// 盤面の位置が意味のある大きさで違うか
+    static func differs(_ a: BoardRect, _ b: BoardRect) -> Bool {
+        a.size != b.size || abs(a.x - b.x) > a.cell * 0.2 || abs(a.y - b.y) > a.cell * 0.2 || abs(a.cell - b.cell) > a.cell * 0.03
     }
 
     /// 結果がまだないときだけ、状態（読めない・暗い・変化中）を 1 秒に 1 回まで知らせる

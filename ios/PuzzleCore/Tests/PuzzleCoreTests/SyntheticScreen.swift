@@ -78,7 +78,8 @@ struct SyntheticScreen: PixelSource {
     /// 光沢のある球のようなドロップ（独自デザイン）：中心が明るく縁が暗い、左上に白いハイライト、細かいノイズ
     mutating func drawShinyBoard(_ board: Board, x: Double, y: Double, cell: Double,
                                  hueShift: Double = 0, valueScale: Double = 1, seed: UInt64 = 1, enhanced: Bool = false,
-                                 jammerColor: RGB? = nil, jammerPattern: Bool = false, colors: [OrbKind: RGB] = [:]) {
+                                 jammerColor: RGB? = nil, jammerPattern: Bool = false, colors: [OrbKind: RGB] = [:],
+                                 orbRadius: Double = 0.46, checker: (RGB, RGB)? = nil) {
         var rng = seed
         func noise() -> Double {
             rng = rng &* 6364136223846793005 &+ 1442695040888963407
@@ -87,16 +88,16 @@ struct SyntheticScreen: PixelSource {
         let s = board.size
         for r in 0..<s.rows {
             for c in 0..<s.cols {
-                let checker = (r + c) % 2 == 0 ? RGB(58, 44, 40) : RGB(72, 54, 46)
+                let tile = (r + c) % 2 == 0 ? (checker?.0 ?? RGB(58, 44, 40)) : (checker?.1 ?? RGB(72, 54, 46))
                 let x0 = Int(x + Double(c) * cell), y0 = Int(y + Double(r) * cell)
-                fillRect(x: x0, y: y0, w: Int(cell) + 1, h: Int(cell) + 1, checker)
+                fillRect(x: x0, y: y0, w: Int(cell) + 1, h: Int(cell) + 1, tile)
                 let kind = board[r, c]
                 guard let pal = Self.palette[kind] else { continue }
                 let base0 = colors[kind] ?? (kind == .jammer ? (jammerColor ?? pal) : pal)
                 let base = Self.adjust(base0, hueShift: hueShift, valueScale: valueScale)
                 let (bh, bs, bv) = base.hsv
                 let cx = x + (Double(c) + 0.5) * cell, cy = y + (Double(r) + 0.5) * cell
-                let rad = cell * 0.46
+                let rad = cell * orbRadius
                 for yy in max(0, Int(cy - rad))...min(height - 1, Int(cy + rad)) {
                     for xx in max(0, Int(cx - rad))...min(width - 1, Int(cx + rad)) {
                         let dx = (Double(xx) + 0.5 - cx) / rad, dy = (Double(yy) + 0.5 - cy) / rad

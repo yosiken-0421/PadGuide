@@ -402,13 +402,16 @@ public enum BoardReader {
 }
 
 public enum BoardDetector {
-    /// 盤面候補を探す。画面下部を中心に、規則的に丸いドロップが並ぶ位置とサイズを選ぶ。
+    /// 盤面候補を探す。
+    /// 1. 画面の下 75% を走査し、丸いドロップが規則的に並んでいそうな位置（並びの点数の山）を、大きさ・左右の余白ごとに数か所ずつ集める
+    /// 2. 点数の高い候補を実際に読んでみて、ドロップとして一番はっきり読める（信頼度が高い）位置を選ぶ
+    ///    （盤面の上にあるチームや敵の表示も「丸いものが並ぶ」ように見えることがあり、並びの点数だけでは数段ずれて選ぶことがある）
     /// - Parameter fixedSize: 手動でサイズを選んだ場合はそのサイズだけを試す
     public static func detect(_ src: PixelSource, fixedSize: BoardSize? = nil,
                               classifier: ColorClassifier = ColorClassifier()) -> BoardReading? {
         let sizes = fixedSize.map { [$0] } ?? BoardSize.supported
         let W = Double(src.width), H = Double(src.height)
-        var best: (score: Double, rect: BoardRect)?
+        var cands: [(score: Double, rect: BoardRect, metric: Metric)] = []
 
         for size in sizes {
             for inset in [0.0, 0.01, 0.02, 0.03, 0.045, 0.06, 0.08] {
@@ -416,31 +419,111 @@ public enum BoardDetector {
                 let cell = width / Double(size.cols)
                 let h = cell * Double(size.rows)
                 let x = W * inset
-                // 画面の下 75% を粗く走査
+                // 画面の下 75% を粗く走査。2つの指標で候補を出す：
+                // ・並びの点数（ドロップの間が暗い）
+                // ・マスの中の色のそろい具合（ドロップ同士がくっついて見える盤面でも、1マスに1個のドロップがぴったり入る位置で高くなる）
                 let step = max(2, cell / 10)
+                for metric in [Metric.grid, .uniform] {
+                var scan: [(Double, Double)] = []
                 var y = H * 0.25
-                var localBest: (Double, Double)? = nil
                 while y + h <= H {
-                    let s = gridScore(src, BoardRect(x: x, y: y, cell: cell, size: size))
-                    if localBest == nil || s > localBest!.0 { localBest = (s, y) }
+                    scan.append((score(metric, src, BoardRect(x: x, y: y, cell: cell, size: size)), y))
                     y += step
                 }
-                guard let lb = localBest else { continue }
-                var s0 = lb.0, y0 = lb.1
-                // 細かく合わせ込む
-                var yy = max(0, y0 - step)
-                while yy <= min(H - h, y0 + step) {
-                    let s = gridScore(src, BoardRect(x: x, y: yy, cell: cell, size: size))
-                    if s > s0 { s0 = s; y0 = yy }
-                    yy += 1
+                // 点数の山（前後より高い所）を高い順に3つまで。近すぎる山は1つにまとめる
+                var peaks: [(Double, Double)] = []
+                for i in scan.indices {
+                    let prev = i > 0 ? scan[i - 1].0 : -Double.infinity
+                    let next = i + 1 < scan.count ? scan[i + 1].0 : -Double.infinity
+                    if scan[i].0 >= prev && scan[i].0 >= next { peaks.append(scan[i]) }
                 }
-                let rect = BoardRect(x: x, y: y0, cell: cell, size: size)
-                if best == nil || s0 > best!.score { best = (s0, rect) }
+                peaks.sort { $0.0 > $1.0 }
+                var chosen: [(Double, Double)] = []
+                for p in peaks where chosen.count < 3 && !chosen.contains(where: { abs($0.1 - p.1) < cell * 0.5 }) {
+                    chosen.append(p)
+                }
+                for (s, y0) in chosen {
+                    // 細かく合わせ込む
+                    // 同じ点数が続く場合はその真ん中（端に寄らないように）
+                    var fine: [(Double, Double)] = [(s, y0)]
+                    var yy = max(0, y0 - step)
+                    while yy <= min(H - h, y0 + step) {
+                        fine.append((score(metric, src, BoardRect(x: x, y: yy, cell: cell, size: size)), yy))
+                        yy += 1
+                    }
+                    let top = fine.map { $0.0 }.max() ?? s
+                    let ys = fine.filter { $0.0 >= top - 1e-9 }.map { $0.1 }.sorted()
+                    let yBest = ys[ys.count / 2]
+                    cands.append((top, BoardRect(x: x, y: yBest, cell: cell, size: size), metric))
+                }
+                }
             }
         }
-        guard let b = best else { return nil }
-        let reading = BoardReader.read(src, rect: b.rect, classifier: classifier)
-        return reading.isUsable ? reading : nil
+        guard !cands.isEmpty else { return nil }
+        // 指標ごとに上位の候補を実際に読み、一番はっきり読める位置を選ぶ
+        var pool: [BoardRect] = []
+        for m in [Metric.grid, .uniform] {
+            pool += cands.filter { $0.metric == m }.sorted { $0.score > $1.score }.prefix(8).map { $0.rect }
+        }
+        var best: (q: Double, reading: BoardReading)?
+        for rect in pool {
+            let rd = BoardReader.read(src, rect: rect, classifier: classifier)
+            // 盤面は画面の下のほうにある。下端が画面の 85% より上にある候補は少しだけ不利にする
+            let bottom = (rect.y + rect.height) / H
+            let q = quality(rd) - 0.5 * max(0, 0.85 - bottom)
+            if best == nil || q > best!.q { best = (q, rd) }
+        }
+        guard let b = best, b.reading.isUsable else { return nil }
+        return b.reading
+    }
+
+    enum Metric { case grid, uniform }
+
+    static func score(_ m: Metric, _ src: PixelSource, _ rect: BoardRect) -> Double {
+        m == .grid ? gridScore(src, rect) : uniformScore(src, rect)
+    }
+
+    /// マスの中の色のそろい具合。各マスの中心から少し離れた8点が、同じ色相の鮮やかな色（または同じ明るさの灰色）なら1マス分。
+    /// ずれていると2つのドロップにまたがって色がばらばらになる
+    static func uniformScore(_ src: PixelSource, _ rect: BoardRect) -> Double {
+        let size = rect.size
+        var total = 0.0
+        for r in 0..<size.rows {
+            for c in 0..<size.cols {
+                let cx = rect.x + (Double(c) + 0.5) * rect.cell
+                let cy = rect.y + (Double(r) + 0.5) * rect.cell
+                var hs: [Double] = [], vs: [Double] = []
+                hs.reserveCapacity(8)
+                for (dx, dy) in uniformOffsets {
+                    let p = src.rgb(clampX(src, cx + dx * rect.cell), clampY(src, cy + dy * rect.cell))
+                    let (h, sat, v) = RGB(p.0, p.1, p.2).hsv
+                    if sat >= 0.25 && v >= 0.25 { hs.append(h) } else if v >= 0.35 { vs.append(v) }
+                }
+                if hs.count >= 7 {
+                    var sx = 0.0, sy = 0.0
+                    for h in hs { sx += cos(h * Double.pi / 180); sy += sin(h * Double.pi / 180) }
+                    var m = atan2(sy, sx) * 180 / Double.pi
+                    if m < 0 { m += 360 }
+                    if hs.allSatisfy({ BoardReader.hueDistance($0, m) <= 25 }) { total += 1 }
+                } else if vs.count >= 7, let lo = vs.min(), let hi = vs.max(), hi - lo <= 0.25 {
+                    total += 0.6
+                }
+            }
+        }
+        return total / Double(size.count)
+    }
+
+    static let uniformOffsets: [(Double, Double)] = (0..<8).map {
+        let a = Double($0) * Double.pi / 4
+        return (0.25 * cos(a), 0.25 * sin(a))
+    }
+
+    /// 読み取り結果のはっきりさ（大きいほど、本物の盤面にぴったり合っている）
+    public static func quality(_ r: BoardReading) -> Double {
+        guard !r.cells.isEmpty else { return 0 }
+        let n = Double(r.cells.count)
+        let high = Double(r.cells.filter { $0.confidence >= 0.9 }.count) / n
+        return r.averageConfidence + 0.15 * high - 0.03 * Double(r.unknownCount)
     }
 
     /// マスの中が鮮やか・マスの角（ドロップの外側）が暗いほど高い。1マスあたりの平均値。

@@ -238,6 +238,30 @@ final class RecognitionTests: XCTestCase {
         }
     }
 
+    /// 実機（886×1918 の画面共有）に近い画面：ドロップがくっついて見え、盤面の上に暗い赤茶色の表示が並ぶ。
+    /// 以前は盤面の上の表示を盤面と間違えて、数段ずれた位置を読んでいた
+    func testDetectsBoardBelowReddishDisplay() {
+        for (seed, orb) in [(UInt64(170), 0.52), (171, 0.52), (172, 0.46)] {
+            var sc = SyntheticScreen(width: 886, height: 1918, background: RGB(30, 20, 18))
+            let cell = 141.8, x0 = 18.0
+            let y0 = 1918.0 - 92 - cell * 5
+            // 盤面の上：暗い赤茶色の丸いアイコンが盤面と同じ間隔で3段
+            let icons = [RGB(128, 66, 44), RGB(114, 25, 23), RGB(111, 24, 24), RGB(112, 24, 23), RGB(147, 81, 63), RGB(126, 45, 43)]
+            for r in 0..<3 {
+                for c in 0..<6 {
+                    sc.fillCircle(cx: x0 + (Double(c) + 0.5) * cell, cy: y0 - (Double(r) + 0.5) * cell, r: cell * 0.47,
+                                  icons[(r * 2 + c) % icons.count])
+                }
+            }
+            let board = SyntheticScreen.randomBoard(S65, seed: seed)
+            sc.drawShinyBoard(board, x: x0, y: y0, cell: cell, orbRadius: orb,
+                              checker: (RGB(90, 70, 55), RGB(105, 82, 62)))
+            guard let rd = BoardDetector.detect(sc) else { XCTFail("盤面が見つからない \(seed)"); continue }
+            XCTAssertEqual(rd.rect.y, y0, accuracy: cell * 0.3, "盤面の位置（縦）\(seed)")
+            XCTAssertEqual(rd.board, board, "盤面を正しく読む \(seed)")
+        }
+    }
+
     /// 読めた盤面の信頼度は高く、黄色枠（自信がないマス）が出ない
     func testConfidenceIsHighForClearOrbs() {
         let board = SyntheticScreen.randomBoard(S65, seed: 140)
