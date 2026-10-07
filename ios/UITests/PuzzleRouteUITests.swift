@@ -293,4 +293,69 @@ final class PuzzleRouteUITests: XCTestCase {
         XCTAssertTrue(reveal(app.staticTexts["routeSummary"], in: app))
         XCTAssertTrue(app.staticTexts["routeSummary"].label.contains("コンボ"))
     }
+
+    /// 盤面のマスを、画面下の小窓バーに隠れない位置まで動かしてから押す
+    private func tapCell(_ id: String, in app: XCUIApplication) {
+        let cell = app.buttons[id]
+        XCTAssertTrue(revealAbove(cell, in: app) || reveal(cell, in: app), "\(id) が表示される")
+        for _ in 0..<4 where cell.frame.maxY > app.frame.height * 0.6 {
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.7))
+                .press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.45)))
+        }
+        for _ in 0..<4 where cell.frame.minY < app.frame.height * 0.12 {
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3))
+                .press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)))
+        }
+        cell.tap()
+    }
+
+    private func tapButton(_ id: String, in app: XCUIApplication) {
+        let b = app.buttons[id]
+        XCTAssertTrue(reveal(b, in: app) || revealAbove(b, in: app), "\(id) が表示される")
+        b.tap()
+    }
+
+    private func waitLabel(_ e: XCUIElement, contains text: String, timeout: Double = 15) -> Bool {
+        let p = expectation(for: NSPredicate(format: "label CONTAINS %@", text), evaluatedWith: e)
+        return XCTWaiter().wait(for: [p], timeout: timeout) == .completed
+    }
+
+    /// 敵の妨害（縛り）：開始位置を固定するとそこから始まるルートになり、操作不可のマスも設定・解除できる
+    func testConstraintsFromBoard() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-uitest", "-demoBoard"]
+        app.launch()
+        XCTAssertTrue(app.navigationBars["パズルルート"].waitForExistence(timeout: 10))
+        sleep(3)
+
+        // 開始位置：上から3段目・左から3列目（cell-14）
+        tapButton("tool-start", in: app)
+        tapCell("cell-14", in: app)
+        let start = app.staticTexts["routeStart"]
+        XCTAssertTrue(reveal(start, in: app))
+        XCTAssertTrue(waitLabel(start, contains: "上から3段目・左から3列目"), "開始位置が固定される: \(start.label)")
+        let summary = app.staticTexts["constraintSummary"]
+        XCTAssertTrue(reveal(summary, in: app))
+        XCTAssertTrue(waitLabel(summary, contains: "開始位置固定"), summary.label)
+
+        // 操作不可：上から3段目・左から4列目（cell-15）
+        tapButton("tool-blocked", in: app)
+        tapCell("cell-15", in: app)
+        XCTAssertTrue(reveal(summary, in: app))
+        XCTAssertTrue(waitLabel(summary, contains: "操作不可 1マス"), summary.label)
+        let rc = app.staticTexts["routeConstraints"]
+        XCTAssertTrue(reveal(rc, in: app))
+        XCTAssertTrue(waitLabel(rc, contains: "操作不可"), "ルートの計算に縛りが使われる: \(rc.label)")
+
+        // 色を直すモードに戻すと、マスを押したときに色の選択肢が出る
+        tapButton("tool-color", in: app)
+        tapCell("cell-0", in: app)
+        XCTAssertTrue(app.buttons["光"].waitForExistence(timeout: 5), "色の選択肢が出る")
+        app.buttons["光"].tap()
+
+        // すべて解除
+        tapButton("clearConstraints", in: app)
+        XCTAssertTrue(reveal(summary, in: app))
+        XCTAssertTrue(waitLabel(summary, contains: "なし"), summary.label)
+    }
 }

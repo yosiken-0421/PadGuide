@@ -67,7 +67,10 @@ final class SampleHandler: RPBroadcastSampleHandler {
         if t - lastFrame < 0.25 { return }          // 1 秒に約 4 回だけ解析
         lastFrame = t
         if t - lastReload > 2 { reloadSettings() }
-        if SharedStore.takeForceSolve() { session.forceNextSolve() }   // アプリで「今の画面で計算し直す」
+        if SharedStore.takeForceSolve() {   // アプリで「今の画面で計算し直す」・縛りの変更
+            reloadSettings()
+            session.forceNextSolve()
+        }
 
         guard let pb = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
         CVPixelBufferLockBaseAddress(pb, .readOnly)
@@ -130,7 +133,8 @@ final class SampleHandler: RPBroadcastSampleHandler {
             let route = Solver.solve(board, options: options, cancel: flag)
             guard !flag.isCancelled else { return }
             let msg = ResultMessage.make(board: board, confidence: reading.cells.map { $0.confidence }, route: route,
-                                         goals: goals, status: route.result.combos > 0 ? "ok" : "nocombo", source: "iphone")
+                                         goals: goals, status: route.result.combos > 0 ? "ok" : "nocombo", source: "iphone",
+                                         constraints: options.constraints)
             self.session.store(result: msg)
             let newTracker = msg.status == "ok" ? RouteTracker(board: board, path: msg.path) : nil
             // このルートで起こりうる盤面を登録（これと違う盤面になったら自動で読み直す）

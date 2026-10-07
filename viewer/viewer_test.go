@@ -211,6 +211,31 @@ func TestRejectsInvalidResult(t *testing.T) {
 	}
 }
 
+func TestConstraintsAccepted(t *testing.T) {
+	ok := strings.Replace(sampleResult(), `"source":"iphone"`,
+		`"source":"iphone","constraints":{"cols":6,"rows":5,"fixedStart":3,"blocked":[1,2],"thorns":[],"hidden":[4],"unclearable":[5]}`, 1)
+	m, err := ParseResult([]byte(ok))
+	if err != nil {
+		t.Fatalf("縛り付きの正しいデータを受け付けない: %v", err)
+	}
+	if m.Constraints == nil || *m.Constraints.FixedStart != 3 || len(m.Constraints.Blocked) != 2 {
+		t.Fatalf("縛りが読めていない: %+v", m.Constraints)
+	}
+	bad := []string{
+		`"constraints":{"cols":7,"rows":6,"blocked":[],"thorns":[],"hidden":[],"unclearable":[]}`,
+		`"constraints":{"cols":6,"rows":5,"fixedStart":30,"blocked":[],"thorns":[],"hidden":[],"unclearable":[]}`,
+		`"constraints":{"cols":6,"rows":5,"blocked":[-1],"thorns":[],"hidden":[],"unclearable":[]}`,
+		`"constraints":{"cols":6,"rows":5,"blocked":[],"thorns":[],"hidden":[],"unclearable":[9]}`,
+		`"constraints":{"cols":6,"rows":5,"blocked":[],"thorns":[],"hidden":[],"unclearable":[],"image":"AAAA"}`,
+	}
+	for _, c := range bad {
+		b := strings.Replace(sampleResult(), `"source":"iphone"`, `"source":"iphone",`+c, 1)
+		if _, err := ParseResult([]byte(b)); err == nil {
+			t.Fatalf("不正な縛りを受け付けた: %s", c)
+		}
+	}
+}
+
 // ---- 画面共有終了時の破棄 ----
 
 func TestShareEndDiscardsData(t *testing.T) {

@@ -46,14 +46,17 @@ public struct SolverOptions: Codable, Equatable, Sendable {
     /// 広げるときの上限（画面共有拡張のメモリ上限 50MB に収めるため）
     public var maxBeamWidth: Int
     public var goals: Goals
+    /// 敵の妨害による縛り（開始位置固定・操作不可など）。盤面の大きさが違えば使わない
+    public var constraints: BoardConstraints?
 
     public init(maxSteps: Int = SolverOptions.defaultSteps, timeLimit: Double? = 1, beamWidth: Int = 800,
-                maxBeamWidth: Int = 12_000, goals: Goals = Goals()) {
+                maxBeamWidth: Int = 12_000, goals: Goals = Goals(), constraints: BoardConstraints? = nil) {
         self.maxSteps = maxSteps
         self.timeLimit = timeLimit
         self.beamWidth = beamWidth
         self.maxBeamWidth = maxBeamWidth
         self.goals = goals
+        self.constraints = constraints
     }
 }
 
@@ -221,14 +224,19 @@ public enum Solver {
         let deadline = options.timeLimit.map { t0 + $0 }
         let evaluator = Evaluator(size: size)
         let goals = options.goals
-        let maxCombos = theoreticalMaxCombos(board)
+        // 縛り：雲・ルーレット・消せない色は「消えないドロップ」として計算し、通れないマス・開始位置を守る
+        let cons = options.constraints?.effective(for: size)
+        let work = cons?.solvingBoard(board) ?? board
+        let maxCombos = theoreticalMaxCombos(work)
         let maxSteps = max(1, options.maxSteps)
-        let base = board.raw
+        let base = work.raw
+        let starts = cons?.startCells() ?? Array(0..<size.count)
+        let enter = (0..<size.count).map { cons?.canEnter($0) ?? true }
 
         // 何も動かさない状態
         let ev0 = evaluator.evaluate(raw: base)
         var best = RunResult()
-        best.path = [0]
+        best.path = [starts.first ?? 0]
         best.score = goalScore(ev0, goals)
         best.met = allGoalsMet(ev0, goals, maxCombos: maxCombos)
 
@@ -237,7 +245,8 @@ public enum Solver {
         while true {
             let runStart = clock()
             let r = beamRun(base: base, size: size, width: width, maxSteps: maxSteps, goals: goals,
-                            maxCombos: maxCombos, evaluator: evaluator, deadline: deadline, cancel: cancel, clock: clock)
+                            maxCombos: maxCombos, evaluator: evaluator, deadline: deadline, cancel: cancel, clock: clock,
+                            starts: starts, enter: enter)
             expanded += r.expanded
             if r.path.count >= 2 && r.isBetter(than: best) { best = r }
             if r.cancelled { cancelled = true; stopped = true; break }
@@ -276,7 +285,7 @@ public enum Solver {
     /// 探索幅 width のビームサーチを1回行う
     static func beamRun(base: [Int8], size: BoardSize, width: Int, maxSteps: Int, goals: Goals, maxCombos: Int,
                         evaluator: Evaluator, deadline: Double?, cancel: CancellationFlag?,
-                        clock: () -> Double) -> RunResult {
+                        clock: () -> Double, starts: [Int], enter: [Bool]) -> RunResult {
         let N = size.count
         let dirs = Direction.allCases
         let wantShapes = !goals.shapeGoals.isEmpty
@@ -284,7 +293,11 @@ public enum Solver {
         for (i, s) in ClearShape.allCases.enumerated() where goals.shapeGoals.contains(s) { shapeBits |= 1 << UInt8(i) }
         // 隣のマス（盤面外は -1）
         var nbr = [Int](repeating: -1, count: N * 4)
-        for p in 0..<N { for (di, d) in dirs.enumerated() { nbr[p * 4 + di] = BoardOps.neighbor(p, d, size) ?? -1 } }
+        for p in 0..<N {
+            for (di, d) in dirs.enumerated() {
+                if let q = BoardOps.neighbor(p, d, size), enter[q] { nbr[p * 4 + di] = q }   // 通れないマスへは進まない
+            }
+        }
 
         let beamCap = max(width, N)
         let candCap = beamCap * 4
@@ -295,13 +308,13 @@ public enum Solver {
         var beamPos = [Int](), beamPrev = [Int](), beamDir = [Int](), beamTurns = [Int]()
         beamPos.reserveCapacity(beamCap); beamPrev.reserveCapacity(beamCap)
         beamDir.reserveCapacity(beamCap); beamTurns.reserveCapacity(beamCap)
-        for p in 0..<N {
-            for k in 0..<N { beamBoards[p * N + k] = base[k] }
+        for (j, p) in starts.enumerated() {
+            for k in 0..<N { beamBoards[j * N + k] = base[k] }
             beamPos.append(p); beamPrev.append(-1); beamDir.append(-1); beamTurns.append(0)
         }
         // 経路復元用：深さごとの (親の index, 位置)
-        var layerParent: [[Int32]] = [[Int32](repeating: -1, count: N)]
-        var layerPos: [[UInt8]] = [(0..<N).map { UInt8($0) }]
+        var layerParent: [[Int32]] = [[Int32](repeating: -1, count: starts.count)]
+        var layerPos: [[UInt8]] = [starts.map { UInt8($0) }]
 
         var res = RunResult()
         var bestDepth = -1, bestParent = -1, bestLast = 0

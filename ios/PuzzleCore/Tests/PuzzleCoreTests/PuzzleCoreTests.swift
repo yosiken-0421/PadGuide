@@ -461,6 +461,136 @@ final class SolverTests: XCTestCase {
     }
 }
 
+// MARK: - 敵の妨害（縛り）
+
+final class ConstraintTests: XCTestCase {
+
+    private func opts(_ c: BoardConstraints, width: Int = 400) -> SolverOptions {
+        SolverOptions(maxSteps: 32, timeLimit: nil, beamWidth: width, constraints: c)
+    }
+
+    /// 操作開始位置の固定：指定したマスから動かし始める
+    func testFixedStartPosition() {
+        for (seed, start) in [(UInt64(401), 0), (402, 14), (403, 29)] {
+            let b = SyntheticScreen.randomBoard(S65, seed: seed)
+            let c = BoardConstraints(size: S65, fixedStart: start)
+            let r = Solver.solve(b, options: opts(c))
+            XCTAssertEqual(r.start, start, "開始位置 \(start) から動かす")
+            XCTAssertGreaterThan(r.result.combos, 0)
+            XCTAssertTrue(c.allows(path: r.path))
+            // 開始位置を固定しないときと同じく、ルートの評価は実際に動かした盤面と一致する
+            let after = BoardOps.apply(start: r.start, moves: r.moves, to: b)!
+            XCTAssertEqual(Evaluator(size: S65).evaluate(after), r.result)
+        }
+    }
+
+    /// 操作不可（テープ）と棘のマスには入らない
+    func testBlockedAndThornCellsAreAvoided() {
+        let b = SyntheticScreen.randomBoard(S65, seed: 404)
+        // 中央の縦1列をテープ、右下に棘
+        let c = BoardConstraints(size: S65, blocked: [2, 8, 14, 20, 26], thorns: [23, 29])
+        let r = Solver.solve(b, options: opts(c))
+        XCTAssertGreaterThan(r.steps, 0)
+        XCTAssertTrue(c.allows(path: r.path), "通れないマスを通っている: \(r.path)")
+        for i in r.path { XCTAssertFalse([2, 8, 14, 20, 26, 23, 29].contains(i)) }
+        let after = BoardOps.apply(start: r.start, moves: r.moves, to: b)!
+        for i in [2, 8, 14, 20, 26, 23, 29] { XCTAssertEqual(after.cells[i], b.cells[i], "動かせないマスのドロップは元のまま") }
+    }
+
+    /// 消せない状態の色は消さないものとして計算し、最大コンボの数からも除く
+    func testUnclearableColor() {
+        let b = SyntheticScreen.randomBoard(S65, seed: 405)
+        let c = BoardConstraints(size: S65, unclearable: [.heart])
+        let r = Solver.solve(b, options: opts(c, width: 800))
+        XCTAssertEqual(r.result.clearedByKind[Int(OrbKind.heart.rawValue)], 0, "回復は消えない")
+        XCTAssertEqual(Solver.theoreticalMaxCombos(c.solvingBoard(b)),
+                       Solver.theoreticalMaxCombos(b) - b.cells.filter { $0 == .heart }.count / 3)
+        XCTAssertGreaterThan(r.result.combos, 0)
+    }
+
+    /// 雲・ルーレットのマスは消えないものとして計算する（動かすことはできる）
+    func testHiddenCellsAreNotCounted() {
+        let b = Board(size: S65, string: """
+            RRBGLD
+            ??????
+            ??????
+            ??????
+            ??????
+            """)
+        // 何もしなければ左上の火3つ目を揃えれば1コンボ…のはずが、2マス目が雲で色が分からない
+        let c = BoardConstraints(size: S65, hidden: [1])
+        XCTAssertEqual(c.solvingBoard(b).cells[1], .unknown)
+        let r = Solver.solve(b, options: opts(c))
+        XCTAssertEqual(r.result.combos, 0, "見えないマスを当てにしたルートは出さない")
+    }
+
+    /// 盤面の大きさが違う縛りは使わない
+    func testConstraintsForOtherSizeAreIgnored() {
+        let b = SyntheticScreen.randomBoard(S76, seed: 406)
+        let c = BoardConstraints(size: S65, fixedStart: 3)
+        let r1 = Solver.solve(b, options: SolverOptions(maxSteps: 20, timeLimit: nil, beamWidth: 200, constraints: c))
+        let r2 = Solver.solve(b, options: SolverOptions(maxSteps: 20, timeLimit: nil, beamWidth: 200))
+        XCTAssertEqual(r1.path, r2.path)
+    }
+
+    /// 「消せない色」は盤面の大きさが変わっても使う
+    func testUnclearableAppliesToAnySize() {
+        let b = SyntheticScreen.randomBoard(S76, seed: 408)
+        let c = BoardConstraints(size: S65, fixedStart: 3, unclearable: [.water])
+        let e = c.effective(for: S76)
+        XCTAssertEqual(e?.unclearable, [.water])
+        XCTAssertNil(e?.fixedStart)
+        let r = Solver.solve(b, options: SolverOptions(maxSteps: 20, timeLimit: nil, beamWidth: 200, constraints: c))
+        XCTAssertEqual(r.result.clearedByKind[Int(OrbKind.water.rawValue)], 0)
+        XCTAssertNil(BoardConstraints(size: S65, fixedStart: 3).effective(for: S76))
+    }
+
+    func testToggleAndSummary() {
+        var c = BoardConstraints(size: S65)
+        XCTAssertTrue(c.isEmpty)
+        c.toggle(.start, at: 7)
+        XCTAssertEqual(c.fixedStart, 7)
+        c.toggle(.blocked, at: 7)
+        XCTAssertNil(c.fixedStart, "同じマスの別の縛りは外れる")
+        XCTAssertEqual(c.blocked, [7])
+        c.toggle(.blocked, at: 7)
+        XCTAssertTrue(c.isEmpty, "もう一度押すと外れる")
+        c.toggle(.thorn, at: 1); c.toggle(.hidden, at: 2); c.unclearable = [.fire]
+        XCTAssertEqual(c.mark(1), .thorn)
+        XCTAssertEqual(c.mark(2), .hidden)
+        XCTAssertTrue(c.summary.contains("棘"))
+        XCTAssertTrue(c.summary.contains("消せない：火"))
+        XCTAssertFalse(c.canEnter(1))
+        XCTAssertTrue(c.canEnter(2), "雲のマスは動かせる")
+    }
+
+    /// 保存データ：古い（項目が少ない）データも読める
+    func testCodableCompatibility() throws {
+        let c = BoardConstraints(size: S65, fixedStart: 4, blocked: [1], thorns: [2], hidden: [3], unclearable: [.poison])
+        let back = try JSONDecoder().decode(BoardConstraints.self, from: JSONEncoder().encode(c))
+        XCTAssertEqual(back, c)
+        let old = try JSONDecoder().decode(BoardConstraints.self, from: Data(#"{"cols":6,"rows":5}"#.utf8))
+        XCTAssertTrue(old.isEmpty)
+        let opt = try JSONDecoder().decode(SolverOptions.self, from: JSONEncoder().encode(SolverOptions()))
+        XCTAssertNil(opt.constraints)
+    }
+
+    /// 結果のメッセージに縛りが入り、最大コンボ数も縛りを反映する
+    func testResultMessageCarriesConstraints() {
+        let b = SyntheticScreen.randomBoard(S65, seed: 407)
+        let c = BoardConstraints(size: S65, fixedStart: 0, unclearable: [.fire])
+        let r = Solver.solve(b, options: opts(c))
+        let msg = ResultMessage.make(board: b, confidence: [], route: r, goals: Goals(), status: "ok", source: "iphone",
+                                     constraints: c)
+        XCTAssertEqual(msg.constraints, c)
+        XCTAssertEqual(msg.start, 0)
+        XCTAssertEqual(msg.maxCombos, Solver.theoreticalMaxCombos(c.solvingBoard(b)))
+        let none = ResultMessage.make(board: b, confidence: [], route: r, goals: Goals(), status: "ok", source: "iphone",
+                                      constraints: BoardConstraints(size: S65))
+        XCTAssertNil(none.constraints, "空の縛りは送らない")
+    }
+}
+
 // MARK: - 通信・接続・破棄
 
 final class ProtocolTests: XCTestCase {
@@ -501,7 +631,8 @@ final class ProtocolTests: XCTestCase {
                                      goals: Goals(), status: "ok", source: "iphone")
         let obj = try JSONSerialization.jsonObject(with: JSONEncoder().encode(msg)) as! [String: Any]
         let allowed: Set<String> = ["type", "v", "ts", "cols", "rows", "cells", "confidence", "status", "start", "end",
-                                    "moves", "path", "arrows", "combos", "cleared", "steps", "elapsedMs", "achieved", "source"]
+                                    "moves", "path", "arrows", "combos", "cleared", "steps", "elapsedMs", "achieved", "source",
+                                    "constraints"]
         XCTAssertTrue(Set(obj.keys).isSubset(of: allowed), "画像などの余計なデータを送らない: \(obj.keys)")
         XCTAssertEqual(msg.arrows.count, route.steps)
         XCTAssertEqual(msg.cells.count, 30)

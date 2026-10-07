@@ -30,40 +30,51 @@ public struct ResultMessage: Codable, Equatable, Sendable {
     public var achieved: [String]
     /// "iphone"（自動解析）| "iphone-manual"（iPhone で手動修正）
     public var source: String
+    /// 計算に使った敵の妨害の縛り（設定していなければ送らない）
+    public var constraints: BoardConstraints?
 
     public init(ts: Int64, cols: Int, rows: Int, cells: [String], confidence: [Double], status: String,
                 start: Int?, end: Int?, moves: [String], path: [Int], arrows: [[Double]],
-                combos: Int, cleared: Int, steps: Int, elapsedMs: Int, achieved: [String], source: String) {
+                combos: Int, cleared: Int, steps: Int, elapsedMs: Int, achieved: [String], source: String,
+                constraints: BoardConstraints? = nil) {
         self.ts = ts; self.cols = cols; self.rows = rows; self.cells = cells; self.confidence = confidence
         self.status = status; self.start = start; self.end = end; self.moves = moves; self.path = path
         self.arrows = arrows; self.combos = combos; self.cleared = cleared; self.steps = steps
         self.elapsedMs = elapsedMs; self.achieved = achieved; self.source = source
+        self.constraints = constraints
     }
 
     /// 盤面の色の数から決まるコンボ数の上限（保存・送信はしない計算値）
-    public var maxCombos: Int { Solver.theoreticalMaxCombos(cells.map { OrbKind(key: $0) ?? .unknown }) }
+    public var maxCombos: Int {
+        let b = Board(size: BoardSize(cols: cols, rows: rows), cells: cells.map { OrbKind(key: $0) ?? .unknown })
+        return Solver.theoreticalMaxCombos(constraints?.solvingBoard(b) ?? b)
+    }
 
     /// 盤面で組める最大コンボに届いたか
     public var reachedMaxCombos: Bool { status == "ok" && combos >= maxCombos }
 
     /// 盤面とルートから作る
     public static func make(board: Board, confidence: [Double], route: Route?, goals: Goals,
-                            status: String, source: String, now: Date = Date()) -> ResultMessage {
+                            status: String, source: String, constraints: BoardConstraints? = nil,
+                            now: Date = Date()) -> ResultMessage {
         let ts = Int64(now.timeIntervalSince1970 * 1000)
         let conf = confidence.map { ($0 * 100).rounded() / 100 }
+        let cons = constraints?.effective(for: board.size)
         guard let r = route, status == "ok" else {
             return ResultMessage(ts: ts, cols: board.size.cols, rows: board.size.rows,
                                  cells: board.cells.map { $0.key }, confidence: conf, status: status,
                                  start: nil, end: nil, moves: [], path: [], arrows: [],
                                  combos: route?.result.combos ?? 0, cleared: route?.result.cleared ?? 0,
-                                 steps: 0, elapsedMs: Int((route?.elapsed ?? 0) * 1000), achieved: [], source: source)
+                                 steps: 0, elapsedMs: Int((route?.elapsed ?? 0) * 1000), achieved: [], source: source,
+                                 constraints: cons)
         }
         return ResultMessage(ts: ts, cols: board.size.cols, rows: board.size.rows,
                              cells: board.cells.map { $0.key }, confidence: conf, status: status,
                              start: r.start, end: r.end, moves: r.moves.map { $0.rawValue }, path: r.path,
                              arrows: Arrows.segments(path: r.path, cols: board.size.cols),
                              combos: r.result.combos, cleared: r.result.cleared, steps: r.steps,
-                             elapsedMs: Int(r.elapsed * 1000), achieved: r.achieved(goals), source: source)
+                             elapsedMs: Int(r.elapsed * 1000), achieved: r.achieved(goals), source: source,
+                             constraints: cons)
     }
 }
 

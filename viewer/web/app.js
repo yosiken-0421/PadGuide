@@ -80,6 +80,7 @@
     $('revertBtn').hidden = true;
     st.status = m.status;
     st.board = { cols: m.cols, rows: m.rows, cells: m.cells.map(S.kindIndex), conf: m.confidence.length ? m.confidence.slice() : m.cells.map(() => 1) };
+    st.constraints = m.constraints || null;   // iPhone で設定した敵の妨害の縛り（PC で再探索するときも守る）
     st.route = m.status === 'ok' ? {
       start: m.start, end: m.end, path: m.path, moves: m.moves, arrows: m.arrows,
       combos: m.combos, steps: m.steps, elapsedMs: m.elapsedMs, achieved: m.achieved,
@@ -91,7 +92,7 @@
   }
 
   function clearAll() {
-    st.iphone = null; st.board = null; st.route = null; st.status = null; st.edited = false;
+    st.iphone = null; st.board = null; st.route = null; st.status = null; st.edited = false; st.constraints = null;
     stop();
     renderAll();
   }
@@ -110,7 +111,7 @@
     if (st.worker) st.worker.terminate();   // 前の探索はキャンセル
     st.worker = new Worker('worker.js');
     const id = ++st.jobId;
-    const opts = { maxSteps: Number($('optSteps').value), timeLimitMs: Number($('optTime').value), beamWidth: 800, maxBeamWidth: 12000, goals: goals() };
+    const opts = { maxSteps: Number($('optSteps').value), timeLimitMs: Number($('optTime').value), beamWidth: 800, maxBeamWidth: 12000, goals: goals(), constraints: st.constraints || null };
     $('solveBtn').disabled = true;
     $('solveBtn').textContent = '探索中…';
     st.worker.onmessage = (e) => {
@@ -165,6 +166,22 @@
         ctx.strokeStyle = '#FFD400'; ctx.lineWidth = Math.max(3, cell * 0.06);
         ctx.strokeRect(c * cell + 3, r * cell + 3, cell - 6, cell - 6);
       }
+    }
+
+    // 敵の妨害の縛り（iPhone で設定したもの）
+    const cs = st.constraints;
+    if (cs && cs.cols === cols && cs.rows === rows) {
+      const label = (i, text, color) => {
+        const r = Math.floor(i / cols), c = i % cols;
+        ctx.fillStyle = color; ctx.fillRect(c * cell + 2, r * cell + 2, cell * 0.5, cell * 0.24);
+        ctx.fillStyle = '#fff'; ctx.font = '800 ' + Math.round(cell * 0.17) + 'px system-ui, sans-serif';
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText(text, c * cell + 2 + cell * 0.25, r * cell + 2 + cell * 0.12);
+      };
+      (cs.blocked || []).forEach(i => label(i, '不可', '#6B6B6B'));
+      (cs.thorns || []).forEach(i => label(i, '棘', '#B4462F'));
+      (cs.hidden || []).forEach(i => label(i, '雲', '#7C8AA5'));
+      if (cs.fixedStart != null) label(cs.fixedStart, '開始', '#0E8F7A');
     }
 
     const rt = st.route;
@@ -285,7 +302,7 @@
 
   function renderStats() {
     const rt = st.route, b = st.board;
-    const maxC = b ? S.theoreticalMax(b.cells) : 0;
+    const maxC = b ? S.theoreticalMax(S.solvingCells(b.cells, st.constraints, b.cols, b.rows)) : 0;
     $('statCombo').textContent = rt ? (rt.combos >= maxC ? rt.combos + '（最大）' : rt.combos + ' / 最大' + maxC) : '—';
     $('statCombo').title = b ? 'この盤面の色の数から決まる最大コンボ数: ' + maxC : '';
     $('statSteps').textContent = rt ? rt.moves.length + ' 手' : '—';

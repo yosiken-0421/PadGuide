@@ -30,6 +30,19 @@ type ResultMessage struct {
 	ElapsedMs  int         `json:"elapsedMs"`
 	Achieved   []string    `json:"achieved"`
 	Source     string      `json:"source"`
+	// 敵の妨害による縛り（iPhone で設定したときだけ届く）
+	Constraints *Constraints `json:"constraints,omitempty"`
+}
+
+// Constraints は開始位置固定・操作不可などの縛り（ios/PuzzleCore の BoardConstraints と同じ形）
+type Constraints struct {
+	Cols        int   `json:"cols"`
+	Rows        int   `json:"rows"`
+	FixedStart  *int  `json:"fixedStart,omitempty"`
+	Blocked     []int `json:"blocked"`
+	Thorns      []int `json:"thorns"`
+	Hidden      []int `json:"hidden"`
+	Unclearable []int `json:"unclearable"`
 }
 
 type ShareMessage struct {
@@ -118,6 +131,32 @@ func (m *ResultMessage) Validate() error {
 	}
 	if m.Source != "iphone" && m.Source != "iphone-manual" {
 		return errors.New("送信元が不正")
+	}
+	if c := m.Constraints; c != nil {
+		if c.Cols != m.Cols || c.Rows != m.Rows {
+			return errors.New("縛りの盤面サイズが合いません")
+		}
+		if c.FixedStart != nil && (*c.FixedStart < 0 || *c.FixedStart >= n) {
+			return errors.New("固定された開始位置が盤面外")
+		}
+		for _, list := range [][]int{c.Blocked, c.Thorns, c.Hidden} {
+			if len(list) > n {
+				return errors.New("縛りのマスが多すぎます")
+			}
+			for _, i := range list {
+				if i < 0 || i >= n {
+					return errors.New("縛りのマスが盤面外")
+				}
+			}
+		}
+		if len(c.Unclearable) > 9 {
+			return errors.New("消せない種類が多すぎます")
+		}
+		for _, k := range c.Unclearable {
+			if k < 0 || k > 8 {
+				return errors.New("消せない種類が不正")
+			}
+		}
 	}
 	return nil
 }

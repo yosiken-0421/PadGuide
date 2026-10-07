@@ -17,6 +17,8 @@ struct AppSettings: Codable, Equatable {
     var maxSteps = SolverOptions.defaultSteps
     var timeLimit = 1.0
     var goals = Goals()
+    /// 敵の妨害による縛り（開始位置固定・操作不可など）。手動で設定し、解除するまで続く
+    var constraints: BoardConstraints?
 
     var fixedSize: BoardSize? {
         switch sizeMode {
@@ -28,7 +30,8 @@ struct AppSettings: Codable, Equatable {
     }
 
     var solverOptions: SolverOptions {
-        SolverOptions(maxSteps: maxSteps, timeLimit: timeLimit, beamWidth: 800, maxBeamWidth: 12_000, goals: goals)
+        SolverOptions(maxSteps: maxSteps, timeLimit: timeLimit, beamWidth: 800, maxBeamWidth: 12_000, goals: goals,
+                      constraints: constraints)
     }
 }
 

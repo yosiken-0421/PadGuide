@@ -107,3 +107,39 @@ test('時間が残っていれば探索幅を広げて探し直す', () => {
   assert.ok(wide.expanded > narrow.expanded);
   assert.ok(wide.result.combos >= narrow.result.combos);
 });
+
+test('縛り：開始位置固定', () => {
+  for (const [seed, start] of [[401, 0], [402, 14], [403, 29]]) {
+    const b = rnd(30, seed);
+    const c = { cols: 6, rows: 5, fixedStart: start };
+    const r = S.solve(b, 6, 5, { maxSteps: 32, timeLimitMs: null, beamWidth: 400, constraints: c });
+    assert.strictEqual(r.start, start);
+    assert.ok(r.result.combos > 0);
+    assert.ok(S.allowsPath(c, 6, 5, r.path));
+  }
+});
+
+test('縛り：操作不可・棘のマスを通らない', () => {
+  const b = rnd(30, 404);
+  const blocked = [2, 8, 14, 20, 26], thorns = [23, 29];
+  const c = { cols: 6, rows: 5, blocked, thorns };
+  const r = S.solve(b, 6, 5, { maxSteps: 32, timeLimitMs: null, beamWidth: 400, constraints: c });
+  assert.ok(r.moves.length > 0);
+  for (const i of r.path) assert.ok(!blocked.includes(i) && !thorns.includes(i), '通れないマス ' + i);
+  const after = S.applyMoves(b, 6, 5, r.start, r.moves);
+  for (const i of blocked.concat(thorns)) assert.strictEqual(after[i], b[i]);
+});
+
+test('縛り：消せない色・雲', () => {
+  const b = rnd(30, 405);
+  const c = { cols: 6, rows: 5, unclearable: [5], hidden: [0, 1] };
+  const r = S.solve(b, 6, 5, { maxSteps: 32, timeLimitMs: null, beamWidth: 800, constraints: c });
+  assert.strictEqual(r.result.clearedByKind[5], 0);
+  const sc = S.solvingCells(b, c, 6, 5);
+  assert.strictEqual(sc[0], 9); assert.strictEqual(sc[1], 9);
+  assert.strictEqual(r.maxCombos, S.theoreticalMax(sc));
+  // 大きさの違う縛りは使わない
+  const r2 = S.solve(b, 6, 5, { maxSteps: 20, timeLimitMs: null, beamWidth: 200, constraints: { cols: 7, rows: 6, fixedStart: 3 } });
+  const r3 = S.solve(b, 6, 5, { maxSteps: 20, timeLimitMs: null, beamWidth: 200 });
+  assert.deepStrictEqual(r2.path, r3.path);
+});

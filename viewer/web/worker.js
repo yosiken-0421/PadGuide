@@ -11,6 +11,6 @@ self.onmessage = (e) => {
     combos: r.result.combos, cleared: r.result.cleared,
     elapsedMs: Math.round(r.elapsedMs),
     achieved: PuzzleSolver.achieved(r.result, opts.goals),
-    maxCombos: PuzzleSolver.theoreticalMax(cells),
+    maxCombos: r.maxCombos,
   });
 };

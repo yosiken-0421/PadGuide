@@ -32,6 +32,7 @@ struct ContentView: View {
                 shareSection
                 pcSection
                 boardSection
+                constraintSection
                 settingsSection
                 pipSection
                 learnedSection
@@ -123,11 +124,15 @@ struct ContentView: View {
     @ViewBuilder private var boardSection: some View {
         Section {
             if let b = model.board {
-                BoardView(board: b, confidence: model.confidence, result: model.result, progress: model.progress) { i in
-                    editingCell = i
-                    showPicker = true
+                BoardView(board: b, confidence: model.confidence, result: model.result, progress: model.progress,
+                          constraints: model.activeConstraints) { i in
+                    if model.tapCell(i) {
+                        editingCell = i
+                        showPicker = true
+                    }
                 }
                     .listRowInsets(EdgeInsets(top: 8, leading: 8, bottom: 8, trailing: 8))
+                toolPicker
                 if let r = model.result {
                     if r.status == "ok" {
                         VStack(alignment: .leading, spacing: 4) {
@@ -141,7 +146,8 @@ struct ContentView: View {
                                     .font(.footnote).foregroundStyle(.orange)
                                     .accessibilityIdentifier("maxComboStatus")
                             }
-                            if let s = RouteText.start(r) { Text("開始：\(s)") }
+                            if let s = RouteText.start(r) { Text("開始：\(s)").accessibilityIdentifier("routeStart") }
+                            if let c = r.constraints { Text("縛り：\(c.summary)").font(.footnote).accessibilityIdentifier("routeConstraints") }
                             Text(RouteText.firstMoves(r)).font(.title2.bold())
                             if !r.achieved.isEmpty { Text("達成：" + r.achieved.joined(separator: "、")).font(.footnote) }
                         }
@@ -180,6 +186,51 @@ struct ContentView: View {
             Text("ルートを表示した後は、ドロップを動かしている間もルートを変えずに表示し続けます。コンボで消えて次の盤面になると、自動で計算し直します。黄色い枠は認識に自信がないマスです。タップすると正しい色に直せます。直した色の傾向はこの iPhone の中だけに保存されます。")
         }
     }
+
+    /// マスを押したときの動作（色を直す／縛りを付ける）
+    private var toolPicker: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("マスを押したとき").font(.caption).foregroundStyle(.secondary)
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 96), spacing: 6)], spacing: 6) {
+                ForEach(CellTool.allCases) { t in
+                    Button {
+                        model.tapTool = t
+                    } label: {
+                        Text(t.label).font(.footnote.bold()).frame(maxWidth: .infinity, minHeight: 30)
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(model.tapTool == t ? .accentColor : .gray)
+                    .accessibilityIdentifier("tool-\(t.rawValue)")
+                    .accessibilityAddTraits(model.tapTool == t ? .isSelected : [])
+                }
+            }
+        }
+    }
+
+    /// 敵の妨害（縛り）
+    private var constraintSection: some View {
+        Section {
+            Text("設定中：\(model.constraintSummary)")
+                .font(.footnote)
+                .accessibilityIdentifier("constraintSummary")
+            DisclosureGroup("消せない状態のドロップ") {
+                ForEach([OrbKind.fire, .water, .wood, .light, .dark, .heart, .jammer, .poison, .mortalPoison], id: \.self) { k in
+                    Toggle(k.label, isOn: Binding(get: { model.isUnclearable(k) }, set: { model.setUnclearable(k, $0) }))
+                        .accessibilityIdentifier("unclearable-\(k.key)")
+                }
+            }
+            .accessibilityIdentifier("unclearableGroup")
+            Button("縛りをすべて解除", role: .destructive) { model.clearConstraints() }
+                .disabled(model.settings.constraints == nil)
+                .accessibilityIdentifier("clearConstraints")
+        } header: {
+            Text("敵の妨害（縛り）")
+        } footer: {
+            Text(Self.constraintHelp)
+        }
+    }
+
+    static let constraintHelp = "敵のスキルでパズルが縛られたときに設定します。盤面の上の「開始位置」「操作不可」「棘」「雲・ルーレット」を選んでから、盤面のマスを押してください（もう一度押すと外れます）。\n・開始位置：盤面にカーソルが出て、そこから動かし始めるよう指定されたとき\n・操作不可：テープ・お札が貼られたマス（動かせず、指で通れません）\n・棘：動かすとダメージを受けるドロップ（通らないルートにします）\n・雲・ルーレット：色が見えない／変わり続けるマス（消えないものとして計算します）\n・消せない状態：×印が付いた種類のドロップ（消えないものとして計算します）\n縛りは解除するまで続きます。効果が切れたら「縛りをすべて解除」を押してください。"
 
     private var settingsSection: some View {
         Section("探索の設定") {

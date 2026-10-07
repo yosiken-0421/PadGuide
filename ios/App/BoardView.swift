@@ -35,6 +35,8 @@ struct BoardView: View {
     let confidence: [Double]
     let result: ResultMessage?
     var progress: Int? = nil
+    /// 敵の妨害の縛り（マスに印を付ける）
+    var constraints: BoardConstraints? = nil
     var onTapCell: ((Int) -> Void)?
 
     var body: some View {
@@ -56,8 +58,9 @@ struct BoardView: View {
                                 }
                                 .buttonStyle(.plain)
                                 .accessibilityIdentifier("cell-\(i)")
-                                .accessibilityLabel("上から\(r + 1)段目、左から\(c + 1)列目、\(board.cells[i].label)")
-                                .accessibilityHint("タップして色を直す")
+                                .accessibilityLabel("上から\(r + 1)段目、左から\(c + 1)列目、\(board.cells[i].label)"
+                                                    + (constraints?.mark(i).map { "、" + Self.markName($0) } ?? ""))
+                                .accessibilityHint("タップして色を直す、または縛りを付ける")
                             }
                         }
                     }
@@ -85,6 +88,24 @@ struct BoardView: View {
                 ctx.stroke(Path(rect.insetBy(dx: 2, dy: 2)), with: .color(.yellow), lineWidth: max(2, cell * 0.06))
             }
         }
+        // 敵の妨害の縛り：マスの左上に印
+        if let cons = constraints {
+            for i in 0..<board.size.count {
+                guard let m = cons.mark(i) else { continue }
+                let r = CGFloat(i / cols), c = CGFloat(i % cols)
+                let rect = CGRect(x: c * cell, y: r * cell, width: cell, height: cell)
+                if m == .blocked || m == .thorn {
+                    // 通れないマス：斜線
+                    var p = Path()
+                    p.move(to: CGPoint(x: rect.minX + 4, y: rect.maxY - 4)); p.addLine(to: CGPoint(x: rect.maxX - 4, y: rect.minY + 4))
+                    ctx.stroke(p, with: .color(.white.opacity(0.8)), lineWidth: max(2, cell * 0.05))
+                }
+                let tag = CGRect(x: rect.minX + 2, y: rect.minY + 2, width: cell * 0.5, height: cell * 0.26)
+                ctx.fill(Path(roundedRect: tag, cornerRadius: 3), with: .color(Self.markColor(m)))
+                ctx.draw(Text(m.rawValue).font(.system(size: cell * 0.17, weight: .heavy)).foregroundColor(.white),
+                         at: CGPoint(x: tag.midX, y: tag.midY))
+            }
+        }
         // ルート（小窓と同じ描き方：次の1手を強調、番号、START／いま／終）
         guard let res = result, res.status == "ok" else { return }
         let p = progress
@@ -92,6 +113,26 @@ struct BoardView: View {
             UIGraphicsPushContext(cg)
             RouteDrawing.drawRoute(cg, result: res, origin: .zero, cell: cell, progress: p, phase: nil)
             UIGraphicsPopContext()
+        }
+    }
+}
+
+extension BoardView {
+    static func markName(_ m: BoardConstraints.CellMark) -> String {
+        switch m {
+        case .start: return "開始位置固定"
+        case .blocked: return "操作不可"
+        case .thorn: return "棘ドロップ"
+        case .hidden: return "雲・ルーレット"
+        }
+    }
+
+    static func markColor(_ m: BoardConstraints.CellMark) -> Color {
+        switch m {
+        case .start: return Color(red: 0.05, green: 0.56, blue: 0.48)
+        case .blocked: return Color(red: 0.42, green: 0.42, blue: 0.42)
+        case .thorn: return Color(red: 0.71, green: 0.27, blue: 0.18)
+        case .hidden: return Color(red: 0.49, green: 0.54, blue: 0.65)
         }
     }
 }

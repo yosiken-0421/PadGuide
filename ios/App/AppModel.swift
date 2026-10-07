@@ -24,6 +24,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var edited = false
     @Published private(set) var solving = false
     @Published private(set) var learnedCount = 0
+    /// 盤面のマスを押したときの動作（色を直す／縛りを付ける）
+    @Published var tapTool: CellTool = .color
 
     private var colors: [RGB] = []
     /// UI テスト用：見本盤面で「何手目まで進んだか」を指定する（-demoProgress N）
@@ -37,6 +39,7 @@ final class AppModel: ObservableObject {
 
     init() {
         settings = SharedStore.loadSettings()
+        if ProcessInfo.processInfo.arguments.contains("-uitest") { settings.constraints = nil }   // テストは縛りなしで始める
         connection = SharedStore.connection
         learnedCount = SharedStore.loadLearned().count
         let args = ProcessInfo.processInfo.arguments
@@ -121,12 +124,14 @@ final class AppModel: ObservableObject {
         solving = true
         let opts = settings.solverOptions
         let goals = settings.goals
+        let cons = settings.constraints
         let conf = confidence
         let source = edited ? "iphone-manual" : "iphone"
         Task.detached(priority: .userInitiated) {
             let route = Solver.solve(b, options: opts, cancel: flag)
             let msg = ResultMessage.make(board: b, confidence: conf, route: route, goals: goals,
-                                         status: route.result.combos > 0 ? "ok" : "nocombo", source: source)
+                                         status: route.result.combos > 0 ? "ok" : "nocombo", source: source,
+                                         constraints: cons)
             await MainActor.run {
                 guard !flag.isCancelled else { return }
                 self.result = msg
@@ -152,6 +157,48 @@ final class AppModel: ObservableObject {
     func resetLearned() {
         SharedStore.saveLearned([])
         learnedCount = 0
+    }
+
+    // MARK: 敵の妨害（縛り）
+
+    /// 今の盤面に使われる縛り
+    var activeConstraints: BoardConstraints? {
+        guard let c = settings.constraints else { return nil }
+        return board.map { c.effective(for: $0.size) } ?? c
+    }
+
+    var constraintSummary: String { activeConstraints?.summary ?? "なし" }
+
+    /// 盤面のマスを押した。色を直すモードなら true を返す（色の選択肢を出す）
+    func tapCell(_ i: Int) -> Bool {
+        guard let mark = tapTool.mark else { return true }
+        guard let b = board else { return false }
+        var c = settings.constraints?.effective(for: b.size) ?? BoardConstraints(size: b.size)
+        if !c.applies(to: b.size) { c = BoardConstraints(size: b.size, unclearable: c.unclearable) }
+        c.toggle(mark, at: i)
+        setConstraints(c)
+        return false
+    }
+
+    func isUnclearable(_ k: OrbKind) -> Bool { settings.constraints?.unclearable.contains(k) ?? false }
+
+    func setUnclearable(_ k: OrbKind, _ on: Bool) {
+        let size = board?.size ?? settings.constraints?.size ?? .sixByFive
+        var c = settings.constraints ?? BoardConstraints(size: size)
+        c.unclearable.removeAll { $0 == k }
+        if on { c.unclearable.append(k) }
+        setConstraints(c)
+    }
+
+    func clearConstraints() { setConstraints(nil) }
+
+    /// 縛りを保存し、表示中の盤面と画面共有中の盤面で計算し直す
+    private func setConstraints(_ c: BoardConstraints?) {
+        settings.constraints = (c?.isEmpty ?? true) ? nil : c
+        progress = nil
+        offRoute = false
+        if board != nil { resolve() }
+        if sharing { SharedStore.requestForceSolve() }
     }
 
     var lowConfidenceCount: Int { confidence.filter { $0 < BoardReading.lowConfidence }.count }
@@ -204,5 +251,31 @@ final class AppModel: ObservableObject {
         confidence = b.cells.map { $0 == .unknown ? 0.2 : 0.9 }
         colors = []
         resolve()
+    }
+}
+
+/// 盤面のマスを押したときの動作
+enum CellTool: String, CaseIterable, Identifiable {
+    case color, start, blocked, thorn, hidden
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .color: return "色を直す"
+        case .start: return "開始位置"
+        case .blocked: return "操作不可"
+        case .thorn: return "棘"
+        case .hidden: return "雲・ルーレット"
+        }
+    }
+
+    var mark: BoardConstraints.CellMark? {
+        switch self {
+        case .color: return nil
+        case .start: return .start
+        case .blocked: return .blocked
+        case .thorn: return .thorn
+        case .hidden: return .hidden
+        }
     }
 }

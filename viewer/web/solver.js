@@ -220,21 +220,51 @@
     return pairs * 30 + near * 15 - waste * 100;
   }
 
+  /**
+   * 敵の妨害による縛り（iPhone 側の BoardConstraints と同じ）。
+   * { cols, rows, fixedStart, blocked: [], thorns: [], hidden: [], unclearable: [種類番号] }
+   */
+  function activeConstraints(c, cols, rows) {
+    if (!c) return null;
+    // マスを指定する縛りは同じ大きさの盤面だけ。「消せない色」は大きさによらず使う
+    const same = c.cols === cols && c.rows === rows;
+    const x = { fixedStart: same && c.fixedStart != null ? c.fixedStart : null, blocked: same ? c.blocked || [] : [],
+      thorns: same ? c.thorns || [] : [], hidden: same ? c.hidden || [] : [], unclearable: c.unclearable || [] };
+    const empty = x.fixedStart == null && !x.blocked.length && !x.thorns.length && !x.hidden.length && !x.unclearable.length;
+    return empty ? null : x;
+  }
+  function canEnter(c, i) { return !c || (c.blocked.indexOf(i) < 0 && c.thorns.indexOf(i) < 0); }
+  /** 計算用の盤面：雲・ルーレットのマスと消せない種類は「消えないドロップ」として扱う */
+  function solvingCells(cells, c) {
+    if (!c) return Array.from(cells);
+    return Array.from(cells, (v, i) => (c.hidden.indexOf(i) >= 0 || c.unclearable.indexOf(v) >= 0) ? UNKNOWN : v);
+  }
+  function startCells(c, N) {
+    if (c && c.fixedStart != null && c.fixedStart >= 0 && c.fixedStart < N) return [c.fixedStart];
+    const out = [];
+    for (let i = 0; i < N; i++) if (canEnter(c, i)) out.push(i);
+    return out;
+  }
+
   /** 探索幅 width のビームサーチを1回（iPhone 側の Solver.beamRun と同じ手順） */
-  function beamRun(cells, cols, rows, width, maxSteps, goals, maxCombos, run, deadline, opts, now) {
+  function beamRun(cells, cols, rows, width, maxSteps, goals, maxCombos, run, deadline, opts, now, cons) {
     const N = cols * rows;
     const wantShapes = shapeGoals(goals).length > 0;
     const nbr = new Int32Array(N * 4);
-    for (let p = 0; p < N; p++) for (let di = 0; di < 4; di++) nbr[p * 4 + di] = neighbor(p, DIRS[di], cols, rows);
+    for (let p = 0; p < N; p++) for (let di = 0; di < 4; di++) {
+      const q = neighbor(p, DIRS[di], cols, rows);
+      nbr[p * 4 + di] = q >= 0 && canEnter(cons, q) ? q : -1;   // 通れないマスへは進まない
+    }
+    const starts = startCells(cons, N);
     const beamCap = Math.max(width, N), candCap = beamCap * 4;
     let beamBoards = new Int8Array(beamCap * N);
     const candBoards = new Int8Array(candCap * N);
     let beamPos = [], beamPrev = [], beamDir = [], beamTurns = [];
-    for (let p = 0; p < N; p++) {
-      beamBoards.set(cells, p * N);
+    starts.forEach((p, j) => {
+      beamBoards.set(cells, j * N);
       beamPos.push(p); beamPrev.push(-1); beamDir.push(-1); beamTurns.push(0);
-    }
-    const layerParent = [new Array(N).fill(-1)], layerPos = [[...Array(N).keys()]];
+    });
+    const layerParent = [new Array(starts.length).fill(-1)], layerPos = [starts.slice()];
     const res = { path: [], score: -Infinity, steps: 0, turns: 0, met: false, stopped: false, expanded: 0 };
     let bestDepth = -1, bestParent = -1, bestLast = 0;
     const seen = new Set();
@@ -312,15 +342,17 @@
     const maxSteps = Math.max(1, opts.maxSteps || 48);
     const maxBeamWidth = opts.maxBeamWidth || 12000;
     const goals = opts.goals || {};
+    const cons = activeConstraints(opts.constraints, cols, rows);
+    cells = solvingCells(cells, cons);
     const maxCombos = theoreticalMax(cells);
     const ev0 = evaluate(cells, cols, rows);
     const run = makeQuickEval(cols, rows);
-    let best = { path: [0], score: goalScore(ev0, goals), steps: 0, turns: 0, met: allGoalsMet(ev0, goals, maxCombos) };
+    let best = { path: [startCells(cons, cols * rows)[0] || 0], score: goalScore(ev0, goals), steps: 0, turns: 0, met: allGoalsMet(ev0, goals, maxCombos) };
     const better = (a, b) => a.score !== b.score ? a.score > b.score : a.steps !== b.steps ? a.steps < b.steps : a.turns < b.turns;
     let width = Math.max(1, opts.beamWidth || 800), stopped = false, expanded = 0;
     for (;;) {
       const runStart = now();
-      const r = beamRun(cells, cols, rows, width, maxSteps, goals, maxCombos, run, deadline, opts, now);
+      const r = beamRun(cells, cols, rows, width, maxSteps, goals, maxCombos, run, deadline, opts, now, cons);
       expanded += r.expanded;
       if (r.path.length >= 2 && better(r, best)) best = r;
       if (r.stopped) { stopped = true; break; }
@@ -343,7 +375,15 @@
     }
     return { start: path[0], end: path[path.length - 1], path, moves, result, score: goalScore(result, goals),
       turns: best.turns, elapsedMs: now() - t0, stoppedEarly: stopped, expanded,
-      maxCombos, reachedMax: result.combos >= maxCombos };
+      maxCombos, reachedMax: result.combos >= maxCombos, constrained: !!cons };
+  }
+
+  /** ルートが縛りを守っているか */
+  function allowsPath(constraints, cols, rows, path) {
+    const c = activeConstraints(constraints, cols, rows);
+    if (!c || !path.length) return true;
+    if (c.fixedStart != null ? path[0] !== c.fixedStart : !canEnter(c, path[0])) return false;
+    return path.slice(1).every(i => canEnter(c, i));
   }
 
   /** 矢印座標（iPhone 側と同じずらし方） */
@@ -371,7 +411,8 @@
     return a;
   }
 
-  const api = { KINDS, LABELS, UNKNOWN, kindIndex, evaluate, solve, arrows, achieved, applyMoves, theoreticalMax, goalScore };
+  const api = { KINDS, LABELS, UNKNOWN, kindIndex, evaluate, solve, arrows, achieved, applyMoves, theoreticalMax, goalScore,
+    allowsPath, solvingCells: (cells, c, cols, rows) => solvingCells(cells, activeConstraints(c, cols, rows)) };
   root.PuzzleSolver = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof self !== 'undefined' ? self : globalThis);
