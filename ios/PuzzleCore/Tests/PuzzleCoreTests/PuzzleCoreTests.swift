@@ -572,6 +572,34 @@ final class RuleTests: XCTestCase {
         XCTAssertTrue(sq.shapes.contains(.square)); XCTAssertEqual(sq.combos, 1)
     }
 
+    /// T字消し（5個・向きは問わない）と、色ごとの形・つなげた個数
+    func testTShapeAndPerColorInfo() {
+        for text in ["RRR???\n?R????\n?R????\n??????\n??????",
+                     "?G????\n?G????\nGGG???\n??????\n??????",
+                     "B?????\nBBB???\nB?????\n??????\n??????",
+                     "??L???\nLLL???\n??L???\n??????\n??????"] {
+            let r = eval(text)
+            XCTAssertEqual(r.combos, 1, text)
+            XCTAssertEqual(r.cleared, 5)
+            XCTAssertTrue(r.shapes.contains(.tShape), "T字: \(text)")
+            XCTAssertFalse(r.shapes.contains(.cross))
+            XCTAssertFalse(r.shapes.contains(.lShape))
+        }
+        let cross = eval("""
+            ?H????
+            HHH???
+            ?H????
+            RRRR??
+            ??????
+            """)
+        XCTAssertFalse(cross.shapes.contains(.tShape), "十字はT字ではない")
+        XCTAssertEqual(cross.shapesByKind[.heart], [.cross], "回復の十字消し")
+        XCTAssertNil(cross.shapesByKind[.fire])
+        XCTAssertEqual(cross.maxGroupByKind[Int(OrbKind.fire.rawValue)], 4, "火を4個つなげて消した")
+        XCTAssertEqual(cross.maxGroupByKind[Int(OrbKind.heart.rawValue)], 5)
+        XCTAssertEqual(cross.colorCount, 2)
+    }
+
     func testMultipleCombos() {
         let r = eval("""
             RRRBBB
@@ -874,6 +902,106 @@ final class ConstraintTests: XCTestCase {
     }
 }
 
+// MARK: - リーダースキルの条件
+
+final class LeaderConditionTests: XCTestCase {
+
+    private func solve(_ b: Board, _ g: Goals, width: Int = 1500) -> Route {
+        Solver.solve(b, options: SolverOptions(maxSteps: 32, timeLimit: nil, beamWidth: width, goals: g))
+    }
+
+    private func count(_ b: Board, _ k: OrbKind) -> Int { b.cells.filter { $0 == k }.count }
+
+    /// 「木を4個つなげて消す」：木を4個以上まとめて消すルートにする
+    func testConnectColor() {
+        for seed: UInt64 in [501, 502, 503] {
+            let b = SyntheticScreen.randomBoard(S65, seed: seed)
+            guard count(b, .wood) >= 4 else { continue }
+            var g = Goals(); g.connectColor = .wood; g.connectCount = 4
+            let r = solve(b, g)
+            XCTAssertGreaterThanOrEqual(r.result.maxGroupByKind[Int(OrbKind.wood.rawValue)], 4, "盤面 \(seed)")
+            XCTAssertTrue(r.missed(g).isEmpty)
+            XCTAssertTrue(r.achieved(g).contains("木を4個つなげて消す"))
+            let after = BoardOps.apply(start: r.start, moves: r.moves, to: b)!
+            XCTAssertEqual(Evaluator(size: S65).evaluate(after), r.result)
+        }
+    }
+
+    /// 「N色同時攻撃」（回復も1色）と「火水の同時攻撃」
+    func testColorsAtOnce() {
+        let b = SyntheticScreen.randomBoard(S65, seed: 504)
+        var g = Goals(); g.minColors = 6
+        if Self.attack.allSatisfy({ count(b, $0) >= 3 }) {
+            XCTAssertEqual(solve(b, g).result.colorCount, 6, "6色(5色+回復)同時攻撃")
+        }
+        var g2 = Goals(); g2.requiredColors = [.fire, .water]
+        let r2 = solve(b, g2)
+        XCTAssertGreaterThan(r2.result.combosByKind[Int(OrbKind.fire.rawValue)], 0)
+        XCTAssertGreaterThan(r2.result.combosByKind[Int(OrbKind.water.rawValue)], 0)
+        XCTAssertTrue(r2.achieved(g2).contains("火水の同時攻撃"))
+    }
+
+    static let attack: [OrbKind] = [.fire, .water, .wood, .light, .dark, .heart]
+
+    /// 「7コンボちょうど」：それより多くも少なくもしない
+    func testExactCombos() {
+        let b = SyntheticScreen.randomBoard(S65, seed: 505)
+        let free = solve(b, Goals())
+        XCTAssertGreaterThan(free.result.combos, 4)
+        var g = Goals(); g.exactCombos = 4
+        let r = solve(b, g)
+        XCTAssertEqual(r.result.combos, 4, "4コンボちょうど")
+    }
+
+    /// 「Nコンボ以上」「闇の2コンボ」
+    func testComboConditions() {
+        let b = SyntheticScreen.randomBoard(S65, seed: 506)
+        var g = Goals(); g.minCombos = 5
+        XCTAssertGreaterThanOrEqual(solve(b, g).result.combos, 5)
+        if count(b, .dark) >= 6 {
+            var g2 = Goals(); g2.colorComboKind = .dark; g2.colorComboCount = 2
+            let r2 = solve(b, g2)
+            XCTAssertGreaterThanOrEqual(r2.result.combosByKind[Int(OrbKind.dark.rawValue)], 2, "闇の2コンボ")
+        }
+    }
+
+    /// 色を指定した形（回復の十字消し・L字消し）
+    func testColoredShapes() {
+        let b = SyntheticScreen.randomBoard(S65, seed: 507)
+        var g = Goals(); g.lShape = true
+        let r = solve(b, g, width: 2000)
+        XCTAssertTrue(r.result.shapes.contains(.lShape), "L字消し")
+        XCTAssertTrue(r.missed(g).isEmpty)
+        // 同じ色が5個ない色を指定すると満たせない → 満たせなかった条件として出す
+        let few = Self.attack.first { count(b, $0) < 5 }
+        if let k = few {
+            var g2 = Goals(); g2.cross = true; g2.shapeColors[.cross] = k
+            let r2 = solve(b, g2, width: 300)
+            XCTAssertEqual(r2.missed(g2), ["\(k.label)の十字消し"])
+        }
+    }
+
+    /// 「パズル後の残りドロップ数がN個以下」
+    func testRemainingOrbs() {
+        let b = SyntheticScreen.randomBoard(S65, seed: 508)
+        var g = Goals(); g.maxRemaining = 15
+        let r = solve(b, g)
+        XCTAssertLessThanOrEqual(30 - r.result.cleared, 15)
+    }
+
+    /// 以前に保存した設定（新しい項目がない）も読める
+    func testGoalsDecodeOldSettings() throws {
+        let old = #"{"heal":true,"fiveColors":false,"lShape":true,"cross":false,"row":false,"square":false}"#
+        let g = try JSONDecoder().decode(Goals.self, from: Data(old.utf8))
+        XCTAssertTrue(g.heal); XCTAssertTrue(g.lShape)
+        XCTAssertNil(g.connectCount); XCTAssertNil(g.minCombos); XCTAssertFalse(g.tShape)
+        var full = Goals(); full.connectColor = .wood; full.connectCount = 4; full.shapeColors[.cross] = .heart
+        full.requiredColors = [.fire, .water]; full.maxRemaining = 6; full.exactCombos = 7
+        XCTAssertEqual(try JSONDecoder().decode(Goals.self, from: JSONEncoder().encode(full)), full)
+        XCTAssertEqual(full.leaderConditionCount, 4)
+    }
+}
+
 // MARK: - 通信・接続・破棄
 
 final class ProtocolTests: XCTestCase {
@@ -915,7 +1043,7 @@ final class ProtocolTests: XCTestCase {
         let obj = try JSONSerialization.jsonObject(with: JSONEncoder().encode(msg)) as! [String: Any]
         let allowed: Set<String> = ["type", "v", "ts", "cols", "rows", "cells", "confidence", "status", "start", "end",
                                     "moves", "path", "arrows", "combos", "cleared", "steps", "elapsedMs", "achieved", "source",
-                                    "constraints"]
+                                    "constraints", "missed"]
         XCTAssertTrue(Set(obj.keys).isSubset(of: allowed), "画像などの余計なデータを送らない: \(obj.keys)")
         XCTAssertEqual(msg.arrows.count, route.steps)
         XCTAssertEqual(msg.cells.count, 30)

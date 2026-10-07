@@ -83,7 +83,7 @@
     st.constraints = m.constraints || null;   // iPhone で設定した敵の妨害の縛り（PC で再探索するときも守る）
     st.route = m.status === 'ok' ? {
       start: m.start, end: m.end, path: m.path, moves: m.moves, arrows: m.arrows,
-      combos: m.combos, steps: m.steps, elapsedMs: m.elapsedMs, achieved: m.achieved,
+      combos: m.combos, steps: m.steps, elapsedMs: m.elapsedMs, achieved: m.achieved, missed: m.missed || [],
       source: m.source === 'iphone-manual' ? 'iPhone で修正した盤面' : 'iPhone の自動解析',
     } : null;
     st.p = st.route ? st.route.moves.length : 0;
@@ -319,7 +319,8 @@
       $('statConf').textContent = '—';
       $('warnUnknown').hidden = true;
     }
-    $('statAchieved').textContent = rt && rt.achieved && rt.achieved.length ? '達成：' + rt.achieved.join('、') : '';
+    $('statAchieved').textContent = (rt && rt.achieved && rt.achieved.length ? '達成：' + rt.achieved.join('、') : '')
+      + (rt && rt.missed && rt.missed.length ? '　満たせなかった条件：' + rt.missed.join('、') : '');
     $('statSource').textContent = rt ? '計算：' + rt.source + (st.edited ? '（盤面を手で修正済み）' : '') : '';
     $('stepCount').textContent = (rt ? Math.min(rt.moves.length, Math.floor(st.p)) : 0) + ' / ' + (rt ? rt.moves.length : 0) + ' 手';
     const nt = $('notice');

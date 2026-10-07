@@ -1,6 +1,8 @@
 import Foundation
 
-/// 探索で優先する条件
+/// 探索で優先する条件（リーダースキルの発動条件など）。
+/// 条件の数え方は公式の説明（pad.gungho.jp「リーダースキル説明文の一部を調整」）に合わせる：
+/// 「Nコンボ」「N色同時攻撃」「○のNコンボ」「○をN個つなげて消す」は、いずれも「N以上」で発動する。
 public struct Goals: Codable, Equatable, Sendable {
     /// この色を多く消す（nil なら指定なし）
     public var priorityColor: OrbKind?
@@ -10,9 +12,33 @@ public struct Goals: Codable, Equatable, Sendable {
     public var cross: Bool
     public var row: Bool
     public var square: Bool
+    public var tShape: Bool
+    /// 形の条件の色（例：「回復の5個十字消し」。nil ならどの色でもよい）
+    public var shapeColors: [ClearShape: OrbKind]
+
+    /// Nコンボ以上（nil = 条件なし）
+    public var minCombos: Int?
+    /// Nコンボちょうど（落ちコンなしのリーダーなど）
+    public var exactCombos: Int?
+    /// N色以上同時攻撃（火・水・木・光・闇・回復のうち消した種類の数）
+    public var minColors: Int?
+    /// この色をすべて同時に消す（例：「火水の同時攻撃」）
+    public var requiredColors: [OrbKind]
+    /// ○をN個以上つなげて消す（connectColor が nil ならどの色でもよい）
+    public var connectCount: Int?
+    public var connectColor: OrbKind?
+    /// ○のNコンボ以上
+    public var colorComboKind: OrbKind?
+    public var colorComboCount: Int?
+    /// パズル後の残りドロップ数がN個以下
+    public var maxRemaining: Int?
 
     public init(priorityColor: OrbKind? = nil, heal: Bool = false, fiveColors: Bool = false,
-                lShape: Bool = false, cross: Bool = false, row: Bool = false, square: Bool = false) {
+                lShape: Bool = false, cross: Bool = false, row: Bool = false, square: Bool = false,
+                tShape: Bool = false, shapeColors: [ClearShape: OrbKind] = [:],
+                minCombos: Int? = nil, exactCombos: Int? = nil, minColors: Int? = nil, requiredColors: [OrbKind] = [],
+                connectCount: Int? = nil, connectColor: OrbKind? = nil,
+                colorComboKind: OrbKind? = nil, colorComboCount: Int? = nil, maxRemaining: Int? = nil) {
         self.priorityColor = priorityColor
         self.heal = heal
         self.fiveColors = fiveColors
@@ -20,6 +46,46 @@ public struct Goals: Codable, Equatable, Sendable {
         self.cross = cross
         self.row = row
         self.square = square
+        self.tShape = tShape
+        self.shapeColors = shapeColors
+        self.minCombos = minCombos
+        self.exactCombos = exactCombos
+        self.minColors = minColors
+        self.requiredColors = requiredColors
+        self.connectCount = connectCount
+        self.connectColor = connectColor
+        self.colorComboKind = colorComboKind
+        self.colorComboCount = colorComboCount
+        self.maxRemaining = maxRemaining
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case priorityColor, heal, fiveColors, lShape, cross, row, square, tShape, shapeColors
+        case minCombos, exactCombos, minColors, requiredColors, connectCount, connectColor
+        case colorComboKind, colorComboCount, maxRemaining
+    }
+
+    /// 項目が増えても、以前に保存した設定をそのまま読めるようにする（ない項目は「条件なし」）
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        priorityColor = try c.decodeIfPresent(OrbKind.self, forKey: .priorityColor)
+        heal = try c.decodeIfPresent(Bool.self, forKey: .heal) ?? false
+        fiveColors = try c.decodeIfPresent(Bool.self, forKey: .fiveColors) ?? false
+        lShape = try c.decodeIfPresent(Bool.self, forKey: .lShape) ?? false
+        cross = try c.decodeIfPresent(Bool.self, forKey: .cross) ?? false
+        row = try c.decodeIfPresent(Bool.self, forKey: .row) ?? false
+        square = try c.decodeIfPresent(Bool.self, forKey: .square) ?? false
+        tShape = try c.decodeIfPresent(Bool.self, forKey: .tShape) ?? false
+        shapeColors = try c.decodeIfPresent([ClearShape: OrbKind].self, forKey: .shapeColors) ?? [:]
+        minCombos = try c.decodeIfPresent(Int.self, forKey: .minCombos)
+        exactCombos = try c.decodeIfPresent(Int.self, forKey: .exactCombos)
+        minColors = try c.decodeIfPresent(Int.self, forKey: .minColors)
+        requiredColors = try c.decodeIfPresent([OrbKind].self, forKey: .requiredColors) ?? []
+        connectCount = try c.decodeIfPresent(Int.self, forKey: .connectCount)
+        connectColor = try c.decodeIfPresent(OrbKind.self, forKey: .connectColor)
+        colorComboKind = try c.decodeIfPresent(OrbKind.self, forKey: .colorComboKind)
+        colorComboCount = try c.decodeIfPresent(Int.self, forKey: .colorComboCount)
+        maxRemaining = try c.decodeIfPresent(Int.self, forKey: .maxRemaining)
     }
 
     var shapeGoals: [ClearShape] {
@@ -28,7 +94,58 @@ public struct Goals: Codable, Equatable, Sendable {
         if cross { s.append(.cross) }
         if row { s.append(.row) }
         if square { s.append(.square) }
+        if tShape { s.append(.tShape) }
         return s
+    }
+
+    /// 設定されているリーダースキルの条件の数
+    public var leaderConditionCount: Int {
+        var n = shapeGoals.count
+        if minCombos != nil { n += 1 }
+        if exactCombos != nil { n += 1 }
+        if minColors != nil { n += 1 }
+        if !requiredColors.isEmpty { n += 1 }
+        if connectCount != nil { n += 1 }
+        if colorComboKind != nil && colorComboCount != nil { n += 1 }
+        if maxRemaining != nil { n += 1 }
+        return n
+    }
+}
+
+/// 評価結果を読むための共通の窓口（EvalResult と探索中の Evaluator の両方で同じ判定を使う）
+protocol EvalView {
+    var vCombos: Int { get }
+    var vCleared: Int { get }
+    func vClearedByKind(_ k: Int) -> Int
+    func vCombosByKind(_ k: Int) -> Int
+    func vMaxGroup(_ k: Int) -> Int
+    /// 形を作ったか（kind が nil ならどの色でもよい）
+    func vHasShape(_ s: ClearShape, kind: Int?) -> Bool
+}
+
+extension EvalResult: EvalView {
+    var vCombos: Int { combos }
+    var vCleared: Int { cleared }
+    func vClearedByKind(_ k: Int) -> Int { clearedByKind[k] }
+    func vCombosByKind(_ k: Int) -> Int { combosByKind[k] }
+    func vMaxGroup(_ k: Int) -> Int { maxGroupByKind[k] }
+    func vHasShape(_ s: ClearShape, kind: Int?) -> Bool {
+        guard let k = kind else { return shapes.contains(s) }
+        guard let o = OrbKind(rawValue: Int8(k)) else { return false }
+        return shapesByKind[o]?.contains(s) ?? false
+    }
+}
+
+extension Evaluator: EvalView {
+    var vCombos: Int { qCombos }
+    var vCleared: Int { qCleared }
+    func vClearedByKind(_ k: Int) -> Int { qClearedByKind[k] }
+    func vCombosByKind(_ k: Int) -> Int { qCombosByKind[k] }
+    func vMaxGroup(_ k: Int) -> Int { qMaxGroupByKind[k] }
+    func vHasShape(_ s: ClearShape, kind: Int?) -> Bool {
+        let bit = UInt8(1) << UInt8(ClearShape.allCases.firstIndex(of: s)!)
+        if let k = kind { return qShapeKinds[k] & bit != 0 }
+        return qShapes & bit != 0
     }
 }
 
@@ -88,7 +205,42 @@ public struct Route: Sendable {
         if let pc = goals.priorityColor, result.clearedByKind[Int(pc.rawValue)] > 0 {
             a.append("\(pc.label)\(result.clearedByKind[Int(pc.rawValue)])個")
         }
+        a += leaderConditions(goals).filter { $0.1 }.map { $0.0 }
         return a
+    }
+
+    /// 満たせなかったリーダースキルの条件
+    public func missed(_ goals: Goals) -> [String] {
+        leaderConditions(goals).filter { !$0.1 }.map { $0.0 }
+    }
+
+    /// リーダースキルの条件ごとの（名前, 満たしたか）
+    public func leaderConditions(_ goals: Goals) -> [(String, Bool)] {
+        let r = result
+        var out: [(String, Bool)] = []
+        for shape in goals.shapeGoals {
+            let color = goals.shapeColors[shape]
+            out.append(((color.map { $0.label + "の" } ?? "") + shape.rawValue + "消し",
+                        r.vHasShape(shape, kind: color.map { Int($0.rawValue) })))
+        }
+        if let n = goals.minCombos { out.append(("\(n)コンボ以上", r.combos >= n)) }
+        if let n = goals.exactCombos { out.append(("\(n)コンボちょうど", r.combos == n)) }
+        if let n = goals.minColors { out.append(("\(n)色同時攻撃", r.colorCount >= n)) }
+        if !goals.requiredColors.isEmpty {
+            out.append((goals.requiredColors.map { $0.label }.joined() + "の同時攻撃",
+                        goals.requiredColors.allSatisfy { r.combosByKind[Int($0.rawValue)] > 0 }))
+        }
+        if let n = goals.connectCount {
+            out.append(((goals.connectColor.map { $0.label + "を" } ?? "") + "\(n)個つなげて消す",
+                        Solver.maxGroup(r, goals.connectColor) >= n))
+        }
+        if let k = goals.colorComboKind, let n = goals.colorComboCount {
+            out.append(("\(k.label)の\(n)コンボ", r.combosByKind[Int(k.rawValue)] >= n))
+        }
+        if let n = goals.maxRemaining {
+            out.append(("残りドロップ\(n)個以下", size.count - r.cleared <= n))
+        }
+        return out
     }
 }
 
@@ -122,53 +274,93 @@ public enum Solver {
     }
 
     /// 評価値（大きいほど良い）
-    public static func goalScore(_ r: EvalResult, _ goals: Goals) -> Int {
-        var s = r.combos * 10_000 + r.cleared * 10
-        if let pc = goals.priorityColor {
-            let i = Int(pc.rawValue)
-            s += r.clearedByKind[i] * 400 + (r.combosByKind[i] > 0 ? 3_000 : 0)
-        }
-        if goals.heal { s += (r.healCleared > 0 ? 3_000 : 0) + r.healCleared * 100 }
-        if goals.fiveColors && r.fiveColors { s += 30_000 }
-        for shape in goals.shapeGoals where r.shapes.contains(shape) { s += 30_000 }
-        return s
+    public static func goalScore(_ r: EvalResult, _ goals: Goals, cellCount: Int = 30) -> Int {
+        score(r, goals, cellCount: cellCount)
     }
 
-    static func allGoalsMet(_ r: EvalResult, _ goals: Goals, maxCombos: Int) -> Bool {
-        guard r.combos >= maxCombos else { return false }
-        if goals.fiveColors && !r.fiveColors { return false }
-        for shape in goals.shapeGoals where !r.shapes.contains(shape) { return false }
-        if goals.heal && r.healCleared == 0 { return false }
-        if let pc = goals.priorityColor, r.combosByKind[Int(pc.rawValue)] == 0 { return false }
-        return true
+    static func allGoalsMet(_ r: EvalResult, _ goals: Goals, maxCombos: Int, cellCount: Int = 30) -> Bool {
+        met(r, goals, maxCombos: maxCombos, cellCount: cellCount)
     }
 
-    /// goalScore と同じ計算を、Evaluator の直前の結果から行う（メモリ確保なし）
-    static func quickScore(_ e: Evaluator, _ goals: Goals, _ shapeBits: UInt8) -> Int {
-        var s = e.qCombos * 10_000 + e.qCleared * 10
+    /// 条件ごとの達成（リーダースキルの条件は、満たせば大きく加点。満たせなくても近いほど少し加点して探索を導く）
+    static func score<V: EvalView>(_ r: V, _ goals: Goals, cellCount: Int) -> Int {
+        var s = r.vCombos * 10_000 + r.vCleared * 10
         if let pc = goals.priorityColor {
             let i = Int(pc.rawValue)
-            s += e.qClearedByKind[i] * 400 + (e.qCombosByKind[i] > 0 ? 3_000 : 0)
+            s += r.vClearedByKind(i) * 400 + (r.vCombosByKind(i) > 0 ? 3_000 : 0)
         }
         let heart = Int(OrbKind.heart.rawValue)
-        if goals.heal { s += (e.qClearedByKind[heart] > 0 ? 3_000 : 0) + e.qClearedByKind[heart] * 100 }
-        if goals.fiveColors && quickFiveColors(e) { s += 30_000 }
-        s += (e.qShapes & shapeBits).nonzeroBitCount * 30_000
+        if goals.heal { s += (r.vClearedByKind(heart) > 0 ? 3_000 : 0) + r.vClearedByKind(heart) * 100 }
+        if goals.fiveColors && fiveColors(r) { s += 30_000 }
+        for shape in goals.shapeGoals where r.vHasShape(shape, kind: goals.shapeColors[shape].map { Int($0.rawValue) }) {
+            s += 30_000
+        }
+        if let n = goals.minCombos, r.vCombos >= n { s += 30_000 }
+        if let n = goals.exactCombos {
+            if r.vCombos == n { s += 30_000 } else if r.vCombos > n { s -= (r.vCombos - n) * 20_000 }
+        }
+        if let n = goals.minColors {
+            let c = colorCount(r)
+            s += c >= n ? 30_000 : c * 1_000
+        }
+        if !goals.requiredColors.isEmpty {
+            let got = goals.requiredColors.filter { r.vCombosByKind(Int($0.rawValue)) > 0 }.count
+            s += got == goals.requiredColors.count ? 30_000 : got * 1_000
+        }
+        if let n = goals.connectCount {
+            let g = maxGroup(r, goals.connectColor)
+            s += g >= n ? 30_000 : g * 500
+        }
+        if let k = goals.colorComboKind, let n = goals.colorComboCount {
+            let c = r.vCombosByKind(Int(k.rawValue))
+            s += c >= n ? 30_000 : c * 2_000
+        }
+        if let n = goals.maxRemaining {
+            let rem = cellCount - r.vCleared
+            s += rem <= n ? 30_000 : -(rem - n) * 50
+        }
         return s
     }
 
-    static func quickFiveColors(_ e: Evaluator) -> Bool {
-        for k in 0...4 where e.qCombosByKind[k] == 0 { return false }
+    static func met<V: EvalView>(_ r: V, _ goals: Goals, maxCombos: Int, cellCount: Int) -> Bool {
+        if let n = goals.exactCombos {
+            if r.vCombos != n { return false }
+        } else if r.vCombos < maxCombos {
+            return false
+        }
+        if goals.fiveColors && !fiveColors(r) { return false }
+        for shape in goals.shapeGoals where !r.vHasShape(shape, kind: goals.shapeColors[shape].map { Int($0.rawValue) }) {
+            return false
+        }
+        if goals.heal && r.vClearedByKind(Int(OrbKind.heart.rawValue)) == 0 { return false }
+        if let pc = goals.priorityColor, r.vCombosByKind(Int(pc.rawValue)) == 0 { return false }
+        if let n = goals.minCombos, r.vCombos < n { return false }
+        if let n = goals.minColors, colorCount(r) < n { return false }
+        if goals.requiredColors.contains(where: { r.vCombosByKind(Int($0.rawValue)) == 0 }) { return false }
+        if let n = goals.connectCount, maxGroup(r, goals.connectColor) < n { return false }
+        if let k = goals.colorComboKind, let n = goals.colorComboCount, r.vCombosByKind(Int(k.rawValue)) < n { return false }
+        if let n = goals.maxRemaining, cellCount - r.vCleared > n { return false }
         return true
     }
 
-    static func quickGoalsMet(_ e: Evaluator, _ goals: Goals, _ shapeBits: UInt8, maxCombos: Int) -> Bool {
-        guard e.qCombos >= maxCombos else { return false }
-        if goals.fiveColors && !quickFiveColors(e) { return false }
-        if e.qShapes & shapeBits != shapeBits { return false }
-        if goals.heal && e.qClearedByKind[Int(OrbKind.heart.rawValue)] == 0 { return false }
-        if let pc = goals.priorityColor, e.qCombosByKind[Int(pc.rawValue)] == 0 { return false }
+    static func fiveColors<V: EvalView>(_ r: V) -> Bool {
+        for k in 0...4 where r.vCombosByKind(k) == 0 { return false }
         return true
+    }
+
+    /// 同時攻撃の色数（火・水・木・光・闇・回復）
+    static func colorCount<V: EvalView>(_ r: V) -> Int {
+        var n = 0
+        for k in 0...5 where r.vCombosByKind(k) > 0 { n += 1 }
+        return n
+    }
+
+    /// 一度につなげて消した最大の個数（色の指定がなければ、どの色でも）
+    static func maxGroup<V: EvalView>(_ r: V, _ color: OrbKind?) -> Int {
+        if let c = color { return r.vMaxGroup(Int(c.rawValue)) }
+        var m = 0
+        for k in 0..<Evaluator.kindCount where r.vMaxGroup(k) > m { m = r.vMaxGroup(k) }
+        return m
     }
 
     /// 最大コンボに向けた盤面の「揃いやすさ」。
@@ -237,8 +429,8 @@ public enum Solver {
         let ev0 = evaluator.evaluate(raw: base)
         var best = RunResult()
         best.path = [starts.first ?? 0]
-        best.score = goalScore(ev0, goals)
-        best.met = allGoalsMet(ev0, goals, maxCombos: maxCombos)
+        best.score = goalScore(ev0, goals, cellCount: size.count)
+        best.met = allGoalsMet(ev0, goals, maxCombos: maxCombos, cellCount: size.count)
 
         var width = max(1, options.beamWidth)
         var stopped = false, cancelled = false, expanded = 0
@@ -278,7 +470,7 @@ public enum Solver {
             }
         }
         return Route(size: size, start: path[0], path: path, moves: moves, result: result,
-                     score: goalScore(result, goals), turns: best.turns, elapsed: clock() - t0,
+                     score: goalScore(result, goals, cellCount: size.count), turns: best.turns, elapsed: clock() - t0,
                      stoppedEarly: stopped, cancelled: cancelled, expanded: expanded)
     }
 
@@ -289,8 +481,6 @@ public enum Solver {
         let N = size.count
         let dirs = Direction.allCases
         let wantShapes = !goals.shapeGoals.isEmpty
-        var shapeBits: UInt8 = 0
-        for (i, s) in ClearShape.allCases.enumerated() where goals.shapeGoals.contains(s) { shapeBits |= 1 << UInt8(i) }
         // 隣のマス（盤面外は -1）
         var nbr = [Int](repeating: -1, count: N * 4)
         for p in 0..<N {
@@ -351,7 +541,7 @@ public enum Solver {
 
                     res.expanded += 1
                     evaluator.run(UnsafePointer(w), shapes: wantShapes)
-                    let score = quickScore(evaluator, goals, shapeBits)
+                    let score = Self.score(evaluator, goals, cellCount: N)
                     let turns = beamTurns[i] + ((beamDir[i] >= 0 && beamDir[i] != di) ? 1 : 0)
                     let heur = score - evaluator.qCleared * 10 + potential(UnsafePointer(w), size, evaluator) - turns
 
@@ -361,7 +551,7 @@ public enum Solver {
                     if score > res.score || (score == res.score && (depth < res.steps || (depth == res.steps && turns < res.turns))) {
                         bestDepth = depth - 1; bestParent = i; bestLast = np
                         res.score = score; res.steps = depth; res.turns = turns
-                        res.met = quickGoalsMet(evaluator, goals, shapeBits, maxCombos: maxCombos)
+                        res.met = met(evaluator, goals, maxCombos: maxCombos, cellCount: N)
                     }
 
                     if res.expanded & 255 == 0 {

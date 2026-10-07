@@ -32,6 +32,8 @@ type ResultMessage struct {
 	Source     string      `json:"source"`
 	// 敵の妨害による縛り（iPhone で設定したときだけ届く）
 	Constraints *Constraints `json:"constraints,omitempty"`
+	// 満たせなかったリーダースキルの条件（表示用の短い文）
+	Missed []string `json:"missed,omitempty"`
 }
 
 // Constraints は開始位置固定・操作不可などの縛り（ios/PuzzleCore の BoardConstraints と同じ形）
@@ -108,7 +110,7 @@ func (m *ResultMessage) Validate() error {
 	if !validStatus[m.Status] {
 		return errors.New("状態が不正")
 	}
-	if len(m.Moves) > 64 || len(m.Path) > 65 || len(m.Arrows) > 64 || len(m.Achieved) > 16 {
+	if len(m.Moves) > 64 || len(m.Path) > 65 || len(m.Arrows) > 64 || len(m.Achieved) > 24 || len(m.Missed) > 16 {
 		return errors.New("ルートが長すぎます")
 	}
 	for _, p := range m.Path {

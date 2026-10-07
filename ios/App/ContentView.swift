@@ -36,6 +36,7 @@ struct ContentView: View {
                 boardSection
                 constraintSection
                 settingsSection
+                leaderSection
                 pipSection
                 learnedSection
                 privacySection
@@ -159,6 +160,10 @@ struct ContentView: View {
                             if let c = r.constraints { Text("縛り：\(c.summary)").font(.footnote).accessibilityIdentifier("routeConstraints") }
                             Text(RouteText.firstMoves(r)).font(.title2.bold())
                             if !r.achieved.isEmpty { Text("達成：" + r.achieved.joined(separator: "、")).font(.footnote) }
+                            if let m = r.missed, !m.isEmpty {
+                                Text("満たせなかった条件：" + m.joined(separator: "、")).font(.footnote).foregroundStyle(.orange)
+                                    .accessibilityIdentifier("missedConditions")
+                            }
                         }
                     } else {
                         Text(RouteText.status(r.status)).accessibilityIdentifier("routeSummary")
@@ -300,12 +305,89 @@ struct ContentView: View {
             }
             Toggle("回復を消す", isOn: $model.settings.goals.heal)
             Toggle("5色同時消し", isOn: $model.settings.goals.fiveColors)
-            Toggle("L字", isOn: $model.settings.goals.lShape)
-            Toggle("十字", isOn: $model.settings.goals.cross)
-            Toggle("横1列", isOn: $model.settings.goals.row)
-            Toggle("3×3正方形", isOn: $model.settings.goals.square)
         }
     }
+
+    static let attackColors: [OrbKind] = [.fire, .water, .wood, .light, .dark, .heart]
+
+    /// 「なし」を含む数の選択
+    private func numberPicker(_ title: String, _ value: Binding<Int?>, _ range: ClosedRange<Int>, unit: String,
+                              id: String) -> some View {
+        Picker(title, selection: value) {
+            Text("なし").tag(Int?.none)
+            ForEach(Array(range), id: \.self) { Text("\($0)\(unit)").tag(Optional($0)) }
+        }
+        .accessibilityIdentifier(id)
+    }
+
+    private func colorPicker(_ title: String, _ value: Binding<OrbKind?>, any: String, id: String) -> some View {
+        Picker(title, selection: value) {
+            Text(any).tag(OrbKind?.none)
+            ForEach(Self.attackColors, id: \.self) { Text($0.label).tag(Optional($0)) }
+        }
+        .accessibilityIdentifier(id)
+    }
+
+    private func shapeRow(_ shape: ClearShape, _ on: Binding<Bool>) -> some View {
+        Group {
+            Toggle(shape == .row ? "横1列消し" : "5個\(shape.rawValue)消し".replacingOccurrences(of: "5個3×3正方形消し", with: "3×3正方形消し"),
+                   isOn: on)
+                .accessibilityIdentifier("shape-\(shape.rawValue)")
+            if on.wrappedValue {
+                colorPicker("　\(shape.rawValue)の色", Binding(get: { model.settings.goals.shapeColors[shape] },
+                                                             set: { model.settings.goals.shapeColors[shape] = $0 }),
+                            any: "どの色でも", id: "shapeColor-\(shape.rawValue)")
+            }
+        }
+    }
+
+    /// リーダースキルの発動条件（盤面の消し方に関わるもの）
+    private var leaderSection: some View {
+        Section {
+            numberPicker("コンボ数（以上）", $model.settings.goals.minCombos, 3...12, unit: "コンボ以上", id: "lsMinCombos")
+            numberPicker("コンボ数（ちょうど）", $model.settings.goals.exactCombos, 3...10, unit: "コンボちょうど", id: "lsExactCombos")
+            numberPicker("同時攻撃の色数", $model.settings.goals.minColors, 2...6, unit: "色以上", id: "lsMinColors")
+            DisclosureGroup("同時に消す色（例：火水の同時攻撃）") {
+                ForEach(Self.attackColors, id: \.self) { k in
+                    Toggle(k.label, isOn: Binding(
+                        get: { model.settings.goals.requiredColors.contains(k) },
+                        set: { on in
+                            model.settings.goals.requiredColors.removeAll { $0 == k }
+                            if on { model.settings.goals.requiredColors.append(k) }
+                        }))
+                    .accessibilityIdentifier("lsRequired-\(k.key)")
+                }
+            }
+            colorPicker("つなげて消す色", $model.settings.goals.connectColor, any: "どの色でも", id: "lsConnectColor")
+            numberPicker("つなげて消す個数", $model.settings.goals.connectCount, 4...10, unit: "個以上", id: "lsConnectCount")
+            colorPicker("色のコンボ（例：闇の2コンボ）", Binding(
+                get: { model.settings.goals.colorComboKind },
+                set: { k in
+                    model.settings.goals.colorComboKind = k
+                    if k != nil && model.settings.goals.colorComboCount == nil { model.settings.goals.colorComboCount = 2 }
+                }), any: "なし", id: "lsColorComboKind")
+            if model.settings.goals.colorComboKind != nil {
+                Picker("　その色のコンボ数", selection: Binding(
+                    get: { model.settings.goals.colorComboCount ?? 2 },
+                    set: { model.settings.goals.colorComboCount = $0 })) {
+                    ForEach(2...5, id: \.self) { Text("\($0)コンボ以上").tag($0) }
+                }
+            }
+            shapeRow(.lShape, $model.settings.goals.lShape)
+            shapeRow(.cross, $model.settings.goals.cross)
+            shapeRow(.tShape, $model.settings.goals.tShape)
+            shapeRow(.row, $model.settings.goals.row)
+            shapeRow(.square, $model.settings.goals.square)
+            numberPicker("パズル後の残りドロップ数", $model.settings.goals.maxRemaining, 0...10, unit: "個以下", id: "lsMaxRemaining")
+        } header: {
+            Text("リーダースキルの条件")
+        } footer: {
+            Text(Self.leaderHelp)
+        }
+    }
+
+    static let leaderHelp = "使っているリーダースキルの発動条件を設定すると、その条件を満たすルートを優先して探し、そのうえでコンボ数を増やします。例：「木を4個つなげて消すと攻撃力が8倍」→ つなげて消す色＝木、個数＝4個以上。「4コンボ以上で攻撃力が上昇」→ コンボ数（以上）＝4。\n・公式の説明どおり「Nコンボ」「N色同時攻撃」「○のNコンボ」「○をN個つなげて消す」はN以上で数えます。\n・同時攻撃の色数は、火・水・木・光・闇・回復を1色ずつ数えます（「3色(2色+回復)」のように回復も1色）。\n・ダメージや倍率の計算はしません。満たせなかった条件はルートの下に表示します。"
+
 
     /// スマホだけで使うときの説明（小窓の操作は画面下部のバー）
     private var pipSection: some View {

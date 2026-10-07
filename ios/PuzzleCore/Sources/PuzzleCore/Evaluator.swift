@@ -6,6 +6,7 @@ public enum ClearShape: String, Codable, CaseIterable, Sendable {
     case cross = "十字"
     case row = "横1列"
     case square = "3×3正方形"
+    case tShape = "T字"
 }
 
 /// ルート終了後の盤面を評価した結果（落ちコンなし・盤面内の連鎖はあり）
@@ -17,10 +18,16 @@ public struct EvalResult: Equatable, Sendable {
     /// OrbKind.rawValue ごとのコンボ数
     public var combosByKind = [Int](repeating: 0, count: OrbKind.allCases.count)
     public var shapes: Set<ClearShape> = []
+    /// OrbKind.rawValue ごとの、一度につなげて消した最大の個数
+    public var maxGroupByKind = [Int](repeating: 0, count: OrbKind.allCases.count)
+    /// 色ごとの消し方の形
+    public var shapesByKind: [OrbKind: Set<ClearShape>] = [:]
 
     public init() {}
 
     public var healCleared: Int { clearedByKind[Int(OrbKind.heart.rawValue)] }
+    /// 同時攻撃の色数（火・水・木・光・闇・回復のうち消した種類の数）
+    public var colorCount: Int { (0...5).filter { combosByKind[$0] > 0 }.count }
     /// 火水木光闇をすべて消したか
     public var fiveColors: Bool { (0...4).allSatisfy { combosByKind[$0] > 0 } }
 }
@@ -45,6 +52,10 @@ public final class Evaluator {
     private(set) var qCleared = 0
     let qClearedByKind: UnsafeMutablePointer<Int>
     let qCombosByKind: UnsafeMutablePointer<Int>
+    /// 種類ごとの、一度につなげて消した最大の個数
+    let qMaxGroupByKind: UnsafeMutablePointer<Int>
+    /// 種類ごとの消し方の形（ClearShape.allCases の順のビット）
+    let qShapeKinds: UnsafeMutablePointer<UInt8>
     /// ClearShape.allCases の順のビット
     private(set) var qShapes: UInt8 = 0
 
@@ -59,11 +70,14 @@ public final class Evaluator {
         group = .allocate(capacity: n); group.initialize(repeating: 0, count: n)
         qClearedByKind = .allocate(capacity: Self.kindCount); qClearedByKind.initialize(repeating: 0, count: Self.kindCount)
         qCombosByKind = .allocate(capacity: Self.kindCount); qCombosByKind.initialize(repeating: 0, count: Self.kindCount)
+        qMaxGroupByKind = .allocate(capacity: Self.kindCount); qMaxGroupByKind.initialize(repeating: 0, count: Self.kindCount)
+        qShapeKinds = .allocate(capacity: Self.kindCount); qShapeKinds.initialize(repeating: 0, count: Self.kindCount)
     }
 
     deinit {
         g.deallocate(); mark.deallocate(); visited.deallocate(); inGroup.deallocate()
         stack.deallocate(); group.deallocate(); qClearedByKind.deallocate(); qCombosByKind.deallocate()
+        qMaxGroupByKind.deallocate(); qShapeKinds.deallocate()
     }
 
     public func evaluate(_ board: Board) -> EvalResult {
@@ -80,6 +94,12 @@ public final class Evaluator {
         for k in 0..<Self.kindCount {
             res.clearedByKind[k] = qClearedByKind[k]
             res.combosByKind[k] = qCombosByKind[k]
+            res.maxGroupByKind[k] = qMaxGroupByKind[k]
+            if qShapeKinds[k] != 0, let kind = OrbKind(rawValue: Int8(k)) {
+                var set: Set<ClearShape> = []
+                for (i, s) in ClearShape.allCases.enumerated() where qShapeKinds[k] & (1 << UInt8(i)) != 0 { set.insert(s) }
+                res.shapesByKind[kind] = set
+            }
         }
         for (i, s) in ClearShape.allCases.enumerated() where qShapes & (1 << UInt8(i)) != 0 { res.shapes.insert(s) }
         return res
@@ -91,7 +111,7 @@ public final class Evaluator {
         let g = self.g, mark = self.mark, visited = self.visited, stack = self.stack, group = self.group
         for i in 0..<N { g[i] = src[i] }
         qCombos = 0; qCleared = 0; qShapes = 0
-        for k in 0..<Self.kindCount { qClearedByKind[k] = 0; qCombosByKind[k] = 0 }
+        for k in 0..<Self.kindCount { qClearedByKind[k] = 0; qCombosByKind[k] = 0; qMaxGroupByKind[k] = 0; qShapeKinds[k] = 0 }
         let unknown = OrbKind.unknown.rawValue
 
         while true {
@@ -151,7 +171,8 @@ public final class Evaluator {
                 qCleared += groupCount
                 qCombosByKind[Int(color)] += 1
                 qClearedByKind[Int(color)] += groupCount
-                if shapes { detectShapes() }
+                if groupCount > qMaxGroupByKind[Int(color)] { qMaxGroupByKind[Int(color)] = groupCount }
+                if shapes { detectShapes(Int(color)) }
             }
 
             for i in 0..<N where mark[i] { g[i] = -1 }
@@ -174,7 +195,15 @@ public final class Evaluator {
     }
 
     /// 直前に作った group の形を判定
-    private func detectShapes() {
+    private func detectShapes(_ kind: Int) {
+        let before = qShapes
+        qShapes = 0
+        detectShapesCore()
+        qShapeKinds[kind] |= qShapes
+        qShapes |= before
+    }
+
+    private func detectShapesCore() {
         let C = size.cols, R = size.rows
         let cnt = groupCount
         guard cnt == 5 || cnt == 9 || cnt >= C else { return }
@@ -197,6 +226,15 @@ public final class Evaluator {
                 if r > 0, r < R - 1, c > 0, c < C - 1,
                    inGroup[p - C], inGroup[p + C], inGroup[p - 1], inGroup[p + 1] {
                     qShapes |= bit(.cross)
+                }
+                // T字：横に3個（中心がここ）＋中心から縦に2個、または縦に3個＋中心から横に2個
+                if c > 0, c < C - 1, inGroup[p - 1], inGroup[p + 1] {
+                    if r + 2 < R, inGroup[p + C], inGroup[p + 2 * C] { qShapes |= bit(.tShape) }
+                    if r >= 2, inGroup[p - C], inGroup[p - 2 * C] { qShapes |= bit(.tShape) }
+                }
+                if r > 0, r < R - 1, inGroup[p - C], inGroup[p + C] {
+                    if c + 2 < C, inGroup[p + 1], inGroup[p + 2] { qShapes |= bit(.tShape) }
+                    if c >= 2, inGroup[p - 1], inGroup[p - 2] { qShapes |= bit(.tShape) }
                 }
                 // L字：角から横に3個、縦に3個
                 for dc in [-1, 1] {

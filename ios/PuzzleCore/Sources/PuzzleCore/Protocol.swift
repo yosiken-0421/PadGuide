@@ -32,16 +32,19 @@ public struct ResultMessage: Codable, Equatable, Sendable {
     public var source: String
     /// 計算に使った敵の妨害の縛り（設定していなければ送らない）
     public var constraints: BoardConstraints?
+    /// 満たせなかったリーダースキルの条件（なければ送らない）
+    public var missed: [String]?
 
     public init(ts: Int64, cols: Int, rows: Int, cells: [String], confidence: [Double], status: String,
                 start: Int?, end: Int?, moves: [String], path: [Int], arrows: [[Double]],
                 combos: Int, cleared: Int, steps: Int, elapsedMs: Int, achieved: [String], source: String,
-                constraints: BoardConstraints? = nil) {
+                constraints: BoardConstraints? = nil, missed: [String]? = nil) {
         self.ts = ts; self.cols = cols; self.rows = rows; self.cells = cells; self.confidence = confidence
         self.status = status; self.start = start; self.end = end; self.moves = moves; self.path = path
         self.arrows = arrows; self.combos = combos; self.cleared = cleared; self.steps = steps
         self.elapsedMs = elapsedMs; self.achieved = achieved; self.source = source
         self.constraints = constraints
+        self.missed = missed
     }
 
     /// 盤面の色の数から決まるコンボ数の上限（保存・送信はしない計算値）
@@ -74,7 +77,7 @@ public struct ResultMessage: Codable, Equatable, Sendable {
                              arrows: Arrows.segments(path: r.path, cols: board.size.cols),
                              combos: r.result.combos, cleared: r.result.cleared, steps: r.steps,
                              elapsedMs: Int(r.elapsed * 1000), achieved: r.achieved(goals), source: source,
-                             constraints: cons)
+                             constraints: cons, missed: r.missed(goals).isEmpty ? nil : r.missed(goals))
     }
 }
 
