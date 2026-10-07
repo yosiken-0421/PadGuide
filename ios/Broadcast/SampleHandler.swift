@@ -99,8 +99,13 @@ final class SampleHandler: RPBroadcastSampleHandler {
         badFrames = 0
         lastGoodFrame = t
 
+        // 雲・ルーレットに指定したマスは見ない（色が変わり続けても、盤面が変わったとみなさない）
+        let ignored = settings.constraints?.effective(for: r.size)?.hidden ?? []
+        session.setIgnored(ignored)
+
         // ルート表示中：今の盤面からどこまで操作が進んだかを推定して知らせる
         lock.lock()
+        tracker?.ignored = Set(ignored)
         var tr = tracker
         let changed = tr?.update(reading.cells.map { $0.kind }) ?? false
         if changed { tracker = tr }
@@ -136,7 +141,8 @@ final class SampleHandler: RPBroadcastSampleHandler {
                                          goals: goals, status: route.result.combos > 0 ? "ok" : "nocombo", source: "iphone",
                                          constraints: options.constraints)
             self.session.store(result: msg)
-            let newTracker = msg.status == "ok" ? RouteTracker(board: board, path: msg.path) : nil
+            var newTracker = msg.status == "ok" ? RouteTracker(board: board, path: msg.path) : nil
+            newTracker?.ignored = Set(options.constraints?.effective(for: board.size)?.hidden ?? [])
             // このルートで起こりうる盤面を登録（これと違う盤面になったら自動で読み直す）
             self.session.setRoute(boards: newTracker?.boards ?? [board.cells])
             self.lock.lock()
@@ -176,29 +182,51 @@ final class SampleHandler: RPBroadcastSampleHandler {
 }
 
 /// CVPixelBuffer（BGRA または YUV420）から必要な画素だけ読む（コピーしないのでメモリを使わない）
+/// YUV の映像は、映像に付いている変換式（BT.601 / 709 / 2020）と範囲（フル／ビデオ）に合わせて RGB に直す
 struct FrameSource: PixelSource {
     let width: Int, height: Int
     private let bgra: Bool
     private let p0: UnsafePointer<UInt8>, s0: Int
     private let p1: UnsafePointer<UInt8>?, s1: Int
+    let converter: YCbCrConverter?
 
     init?(_ pb: CVPixelBuffer) {
         width = CVPixelBufferGetWidth(pb)
         height = CVPixelBufferGetHeight(pb)
-        switch CVPixelBufferGetPixelFormatType(pb) {
+        let format = CVPixelBufferGetPixelFormatType(pb)
+        switch format {
         case kCVPixelFormatType_32BGRA:
             guard let b = CVPixelBufferGetBaseAddress(pb) else { return nil }
             bgra = true
             p0 = UnsafePointer(b.assumingMemoryBound(to: UInt8.self)); s0 = CVPixelBufferGetBytesPerRow(pb)
             p1 = nil; s1 = 0
+            converter = nil
         case kCVPixelFormatType_420YpCbCr8BiPlanarFullRange, kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange:
             guard let y = CVPixelBufferGetBaseAddressOfPlane(pb, 0), let uv = CVPixelBufferGetBaseAddressOfPlane(pb, 1) else { return nil }
             bgra = false
             p0 = UnsafePointer(y.assumingMemoryBound(to: UInt8.self)); s0 = CVPixelBufferGetBytesPerRowOfPlane(pb, 0)
             p1 = UnsafePointer(uv.assumingMemoryBound(to: UInt8.self)); s1 = CVPixelBufferGetBytesPerRowOfPlane(pb, 1)
+            converter = YCbCrConverter(matrix: Self.matrix(of: pb, height: height),
+                                       fullRange: format == kCVPixelFormatType_420YpCbCr8BiPlanarFullRange)
         default:
             return nil
         }
+    }
+
+    /// 映像に付いている変換式を読む（なければ映像の大きさから決める）
+    static func matrix(of pb: CVPixelBuffer, height: Int) -> YCbCrConverter.Matrix {
+        if let v = CVBufferCopyAttachment(pb, kCVImageBufferYCbCrMatrixKey, nil), let s = v as? String {
+            if s == (kCVImageBufferYCbCrMatrix_ITU_R_709_2 as String) { return .bt709 }
+            if s == (kCVImageBufferYCbCrMatrix_ITU_R_601_4 as String) { return .bt601 }
+            if s == (kCVImageBufferYCbCrMatrix_ITU_R_2020 as String) { return .bt2020 }
+        }
+        return YCbCrConverter.defaultMatrix(height: height)
+    }
+
+    /// 診断用：映像の形式（例 "YUV フルレンジ / bt709"）
+    var formatDescription: String {
+        guard let c = converter else { return "BGRA" }
+        return "YUV \(c.fullRange ? "フルレンジ" : "ビデオレンジ") / \(c.matrix.rawValue)"
     }
 
     func rgb(_ x: Int, _ y: Int) -> (UInt8, UInt8, UInt8) {
@@ -207,10 +235,8 @@ struct FrameSource: PixelSource {
             let i = y * s0 + x * 4
             return (p0[i + 2], p0[i + 1], p0[i])
         }
-        let Y = Double(p0[y * s0 + x])
+        let Y = p0[y * s0 + x]
         let j = (y / 2) * s1 + (x / 2) * 2
-        let cb = Double(p1![j]) - 128, cr = Double(p1![j + 1]) - 128
-        func c(_ v: Double) -> UInt8 { UInt8(min(max(v, 0), 255)) }
-        return (c(Y + 1.402 * cr), c(Y - 0.344136 * cb - 0.714136 * cr), c(Y + 1.772 * cb))
+        return converter!.rgb(Y, p1![j], p1![j + 1])
     }
 }

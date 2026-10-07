@@ -11,6 +11,8 @@ public struct RouteTracker: Sendable {
     public private(set) var progress = 0
     public private(set) var offRoute = false
     private var missCount = 0
+    /// 見ないマス（雲・ルーレット）。色が変わり続けても比べない
+    public var ignored: Set<Int> = []
 
     /// 違ってよいマス数（持っているドロップ・途中の描画のぶん）
     public static let tolerance = 3
@@ -46,12 +48,20 @@ public struct RouteTracker: Sendable {
         return n
     }
 
+    /// 見ないマスと、ルートの盤面で「不明」のマスを除いて比べる
+    func maskedMismatch(_ a: [OrbKind], _ b: [OrbKind]) -> Int {
+        guard a.count == b.count else { return Int.max }
+        var n = 0
+        for i in a.indices where !ignored.contains(i) && b[i] != .unknown && a[i] != b[i] { n += 1 }
+        return n
+    }
+
     /// 今の盤面を渡す。進み具合や「ルートから外れた」が変わったら true
     @discardableResult
     public mutating func update(_ cells: [OrbKind]) -> Bool {
         var best = -1, bestMiss = Int.max
         for (k, b) in boards.enumerated() {
-            let m = Self.mismatch(cells, b)
+            let m = ignored.isEmpty ? Self.mismatch(cells, b) : maskedMismatch(cells, b)
             if m < bestMiss || (m == bestMiss && Self.prefer(k, over: best, progress: progress)) {
                 best = k; bestMiss = m
             }

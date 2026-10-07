@@ -176,7 +176,8 @@ public enum BoardReader {
     /// ドロップの内側を同心円状にサンプリングする。
     /// - 光沢（白いハイライト）や強化マーク・ロックの模様は「鮮やかでない画素」として除外し、基礎色だけを見る
     /// - 縁の影で暗い画素も除外する
-    static func feature(_ src: PixelSource, cx: Double, cy: Double, cell: Double) -> CellFeature {
+    /// - satMin: 「鮮やかな画素」とみなす彩度。画面全体の色が薄い盤面では下げる（盤面ごとに決める）
+    static func feature(_ src: PixelSource, cx: Double, cy: Double, cell: Double, satMin: Double = 0.30) -> CellFeature {
         let patch = max(1, Int(cell * 0.02))
         var sx = 0.0, sy = 0.0, wsum = 0.0
         var colorful = 0, greyBright = 0, grey = 0, total = 0
@@ -194,7 +195,7 @@ public enum BoardReader {
                 let c = average(src, x, y, patch)
                 let (h, sat, v) = c.hsv
                 total += 1
-                if sat >= 0.30 && v >= 0.22 {
+                if sat >= satMin && v >= 0.22 {
                     colorful += 1
                     let w = sat * v
                     sx += cos(h * Double.pi / 180) * w
@@ -202,10 +203,10 @@ public enum BoardReader {
                     wsum += w
                     vs += v; ss += sat
                     cr += Int(c.r); cg += Int(c.g); cb += Int(c.b); cn += 1
-                } else if sat < 0.24 && v > 0.55 {
+                } else if sat < min(0.24, satMin * 0.8) && v > 0.55 {
                     greyBright += 1
                 }
-                if sat < 0.30 && v >= 0.30 { grey += 1 }
+                if sat < satMin && v >= 0.30 { grey += 1 }
                 if v >= 0.30 && sat >= 0.08 {
                     tx += cos(h * Double.pi / 180) * sat
                     ty += sin(h * Double.pi / 180) * sat
@@ -267,15 +268,24 @@ public enum BoardReader {
     /// 3. 手動修正で覚えた色があれば、それを優先する
     public static func read(_ src: PixelSource, rect: BoardRect, classifier: ColorClassifier) -> BoardReading {
         let size = rect.size
-        var feats: [CellFeature] = []
-        feats.reserveCapacity(size.count)
-        for r in 0..<size.rows {
-            for c in 0..<size.cols {
-                let cx = rect.x + (Double(c) + 0.5) * rect.cell
-                let cy = rect.y + (Double(r) + 0.5) * rect.cell
-                feats.append(feature(src, cx: cx, cy: cy, cell: rect.cell))
+        func features(_ satMin: Double) -> [CellFeature] {
+            var out: [CellFeature] = []
+            out.reserveCapacity(size.count)
+            for r in 0..<size.rows {
+                for c in 0..<size.cols {
+                    let cx = rect.x + (Double(c) + 0.5) * rect.cell
+                    let cy = rect.y + (Double(r) + 0.5) * rect.cell
+                    out.append(feature(src, cx: cx, cy: cy, cell: rect.cell, satMin: satMin))
+                }
             }
+            return out
         }
+        var feats = features(0.30)
+        // 画面全体の色が薄い（彩度が低い）盤面では、「鮮やか」の基準をその盤面に合わせて下げて読み直す。
+        // 決まった基準のままだと、色ドロップをお邪魔・毒・不明と読み違える
+        let bodySat = feats.map { $0.bodyS }.sorted()
+        let satMin = min(0.30, max(0.14, bodySat[bodySat.count / 2] * 0.55))
+        if satMin < 0.30 { feats = features(satMin) }
 
         // その盤面での各色の中心色相を求める（基準から大きくずれない範囲で）
         var centers = prototypeHue
@@ -303,9 +313,9 @@ public enum BoardReader {
         // （くすんでいれば毒、暗ければ猛毒。闇ドロップがない盤面では決まった値で判断）
         let darkRefs = feats.filter {
             guard let h = $0.hue else { return false }
-            return $0.colorfulRatio >= 0.45 && (255..<300).contains(h) && $0.meanS >= 0.55 && $0.meanV >= 0.5
+            return $0.colorfulRatio >= 0.45 && (255..<300).contains(h) && $0.meanS >= min(0.55, typicalS * 0.8) && $0.meanV >= 0.5
         }
-        var poisonS = 0.5, mortalV = 0.42
+        var poisonS = min(0.5, typicalS * 0.75), mortalV = 0.42
         if darkRefs.count >= 2 {
             let dS = darkRefs.map { $0.meanS }.sorted()[darkRefs.count / 2]
             let dV = darkRefs.map { $0.meanV }.sorted()[darkRefs.count / 2]
@@ -369,9 +379,9 @@ public enum BoardReader {
     /// 彩度の低い色のマスをお邪魔と判断するか（紫系＝毒・猛毒は除く）
     static func isDullJammer(_ f: CellFeature, dullLimit: Double) -> Bool {
         guard let h = f.hue, !(255..<300).contains(h) else { return false }
-        if f.meanS < 0.36 { return true }
-        // 青〜緑がかった灰色（お邪魔によくある色味）は、盤面の色ドロップより明らかにくすんでいればお邪魔
-        return (150..<260).contains(h) && f.meanS < dullLimit
+        // 盤面の色ドロップより明らかにくすんでいて、とても色が薄いか、青〜緑がかった灰色（お邪魔によくある色味）ならお邪魔
+        guard f.meanS < dullLimit else { return false }
+        return f.meanS < 0.36 || (150..<260).contains(h)
     }
 
     static func average(_ src: PixelSource, _ cx: Int, _ cy: Int, _ r: Int) -> RGB {
@@ -401,7 +411,7 @@ public enum BoardDetector {
         var best: (score: Double, rect: BoardRect)?
 
         for size in sizes {
-            for inset in [0.0, 0.01, 0.02, 0.03, 0.045] {
+            for inset in [0.0, 0.01, 0.02, 0.03, 0.045, 0.06, 0.08] {
                 let width = W * (1 - inset * 2)
                 let cell = width / Double(size.cols)
                 let h = cell * Double(size.rows)
@@ -509,5 +519,61 @@ public struct BoardStabilizer: Sendable {
         var n = 0
         for i in a.indices where a[i] != b[i] { n += 1 }
         return n
+    }
+}
+
+/// 画面共有の映像（YCbCr）を RGB に直す。映像ごとの変換式（BT.601 / 709 / 2020）と
+/// 値の範囲（フルレンジ／ビデオレンジ）に合わせないと、色相や鮮やかさがずれて色を読み違える。
+public struct YCbCrConverter: Equatable, Sendable {
+    public enum Matrix: String, Sendable { case bt601, bt709, bt2020 }
+
+    public let matrix: Matrix
+    public let fullRange: Bool
+    private let rCr: Double, gCb: Double, gCr: Double, bCb: Double
+
+    public init(matrix: Matrix, fullRange: Bool) {
+        self.matrix = matrix
+        self.fullRange = fullRange
+        let (kr, kb): (Double, Double)
+        switch matrix {
+        case .bt601: (kr, kb) = (0.299, 0.114)
+        case .bt709: (kr, kb) = (0.2126, 0.0722)
+        case .bt2020: (kr, kb) = (0.2627, 0.0593)
+        }
+        let kg = 1 - kr - kb
+        rCr = 2 * (1 - kr)
+        bCb = 2 * (1 - kb)
+        gCb = -2 * kb * (1 - kb) / kg
+        gCr = -2 * kr * (1 - kr) / kg
+    }
+
+    /// 変換式の指定がない映像：HD 以上は BT.709、それより小さければ BT.601（映像の一般的な決まり）
+    public static func defaultMatrix(height: Int) -> Matrix { height > 576 ? .bt709 : .bt601 }
+
+    @inline(__always)
+    public func rgb(_ y: UInt8, _ cb: UInt8, _ cr: UInt8) -> (UInt8, UInt8, UInt8) {
+        let Y: Double, Cb: Double, Cr: Double
+        if fullRange {
+            Y = Double(y) / 255
+            Cb = (Double(cb) - 128) / 255
+            Cr = (Double(cr) - 128) / 255
+        } else {
+            Y = (Double(y) - 16) / 219
+            Cb = (Double(cb) - 128) / 224
+            Cr = (Double(cr) - 128) / 224
+        }
+        @inline(__always) func q(_ v: Double) -> UInt8 { UInt8(min(255, max(0, (v * 255).rounded()))) }
+        return (q(Y + rCr * Cr), q(Y + gCb * Cb + gCr * Cr), q(Y + bCb * Cb))
+    }
+
+    /// テスト用：RGB を YCbCr にする（rgb の逆）
+    public func ycbcr(_ r: UInt8, _ g: UInt8, _ b: UInt8) -> (UInt8, UInt8, UInt8) {
+        let R = Double(r) / 255, G = Double(g) / 255, B = Double(b) / 255
+        let kr = (1 - rCr / 2), kb = (1 - bCb / 2), kg = 1 - kr - kb
+        let Y = kr * R + kg * G + kb * B
+        let Cb = (B - Y) / bCb, Cr = (R - Y) / rCr
+        @inline(__always) func q(_ v: Double) -> UInt8 { UInt8(min(255, max(0, v.rounded()))) }
+        if fullRange { return (q(Y * 255), q(Cb * 255 + 128), q(Cr * 255 + 128)) }
+        return (q(16 + Y * 219), q(128 + Cb * 224), q(128 + Cr * 224))
     }
 }

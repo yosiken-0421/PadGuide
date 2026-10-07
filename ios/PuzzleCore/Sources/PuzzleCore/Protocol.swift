@@ -224,6 +224,8 @@ public final class LiveSession: @unchecked Sendable {
     /// 表示中のルートで起こりうる盤面（各手順の後の盤面）。ルートがなければ計算した盤面だけ
     private var _routeBoards: [[OrbKind]] = []
     private var _stableCells: [OrbKind]?
+    /// 見ないマス（雲・ルーレット）。色が変わり続けても「盤面が変わった」とみなさない
+    private var _ignored: Set<Int> = []
     /// 表示中のルートのどの盤面とも、このマス数以上違えば「次の盤面」とみなす
     public static let newBoardThreshold = 3
     public private(set) var isActive = false
@@ -246,15 +248,30 @@ public final class LiveSession: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         guard isActive else { return false }
         _lastReading = reading
-        guard _stabilizer.feed(reading.cells.map { $0.kind }), let cells = _stabilizer.consensus else { return false }
+        var kinds = reading.cells.map { $0.kind }
+        for i in _ignored where i < kinds.count { kinds[i] = .unknown }
+        guard _stabilizer.feed(kinds), let cells = _stabilizer.consensus else { return false }
         _stableCells = cells
         if !_routeBoards.isEmpty {
-            let closest = _routeBoards.map { BoardStabilizer.mismatch($0, cells) }.min() ?? Int.max
+            let closest = _routeBoards.map { Self.routeMismatch($0, cells) }.min() ?? Int.max
             if closest < Self.newBoardThreshold { return false }   // ルートの途中（操作中・変化なし）
         }
         _lastSolved = cells
         _routeBoards = [cells]          // ルートが決まるまでは、この盤面と比べる
         return true
+    }
+
+    /// 見ないマス（雲・ルーレット）を設定する。そのマスは「不明」として扱う
+    public func setIgnored(_ cells: [Int]) {
+        lock.lock(); _ignored = Set(cells); lock.unlock()
+    }
+
+    /// ルートの盤面との違い。どちらかが「不明」のマス（見ないマス・読めないマス）は数えない
+    static func routeMismatch(_ route: [OrbKind], _ cells: [OrbKind]) -> Int {
+        guard route.count == cells.count else { return Int.max }
+        var n = 0
+        for i in route.indices where route[i] != cells[i] && route[i] != .unknown && cells[i] != .unknown { n += 1 }
+        return n
     }
 
     /// 確定した盤面（直近のフレームの多数決）。再計算にはこれを使う

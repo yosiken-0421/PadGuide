@@ -200,6 +200,21 @@ final class RecognitionTests: XCTestCase {
         }
     }
 
+    /// 画面全体の色が薄い（彩度が低い）ときも、色ドロップをお邪魔・毒・不明と読み違えない
+    func testWashedOutColors() {
+        for f in [1.0, 0.8, 0.65, 0.55] {
+            var colors: [OrbKind: RGB] = [:]
+            for (k, c) in SyntheticScreen.palette where k != .jammer {
+                let (h, sat, v) = c.hsv
+                colors[k] = SyntheticScreen.hsvToRGB(h, sat * f, v)
+            }
+            for seed: UInt64 in [150, 151, 152] {
+                let board = SyntheticScreen.randomBoard(S65, seed: seed, kinds: [.fire, .water, .wood, .light, .dark, .heart, .jammer])
+                XCTAssertEqual(readShiny(board, scale: 1, colors: colors), board, "彩度 ×\(f)・盤面 \(seed)")
+            }
+        }
+    }
+
     /// 闇ドロップがない盤面の毒、闇しかない盤面（毒と間違えない）
     func testPoisonWithoutDarkAndDarkOnly() {
         let noDark = Board(size: S65, string: """
@@ -229,6 +244,29 @@ final class RecognitionTests: XCTestCase {
         guard let rd = BoardDetector.detect(shinyScreen(board)) else { return XCTFail("盤面が見つからない") }
         XCTAssertTrue(rd.lowConfidenceIndices.isEmpty, "自信がないマス: \(rd.lowConfidenceIndices)")
         XCTAssertGreaterThan(rd.averageConfidence, 0.75)
+    }
+
+    /// 画面共有の映像（YCbCr）を、形式に合わせて元の色に戻せる。形式を間違えると色がずれる
+    func testYCbCrConversion() {
+        let colors = Array(SyntheticScreen.palette.values) + [RGB(0, 0, 0), RGB(255, 255, 255), RGB(128, 128, 128)]
+        for m in [YCbCrConverter.Matrix.bt601, .bt709, .bt2020] {
+            for full in [true, false] {
+                let cv = YCbCrConverter(matrix: m, fullRange: full)
+                for c in colors {
+                    let (y, cb, cr) = cv.ycbcr(c.r, c.g, c.b)
+                    let (r, g, b) = cv.rgb(y, cb, cr)
+                    XCTAssertLessThanOrEqual(RGB(r, g, b).distance(to: c), 6, "\(m) full=\(full) \(c)")
+                }
+            }
+        }
+        // 以前の変換（ビデオレンジの映像を BT.601 フルレンジとして読む）では、色が鈍く・ずれる
+        let wrong = YCbCrConverter(matrix: .bt601, fullRange: true)
+        let right = YCbCrConverter(matrix: .bt709, fullRange: false)
+        let wood = RGB(60, 190, 90)
+        let (y, cb, cr) = right.ycbcr(wood.r, wood.g, wood.b)
+        let w = wrong.rgb(y, cb, cr)
+        XCTAssertLessThan(RGB(w.0, w.1, w.2).hsv.s, wood.hsv.s - 0.04, "形式を間違えると鮮やかさが落ちる")
+        XCTAssertEqual(YCbCrConverter.defaultMatrix(height: 2532), .bt709)
     }
 
     func testLearnedCorrection() {
@@ -777,6 +815,48 @@ final class ProtocolTests: XCTestCase {
         var shuffled = end
         shuffled.cells.reverse()
         XCTAssertTrue(feedStable(s, shuffled), "ルートの途中にない盤面なら読み直す")
+    }
+
+    /// ルーレット・雲に指定したマスの色が変わり続けても、ルートを計算し直さない（操作の順番が変わらない）
+    func testRouletteCellsDoNotTriggerResolve() {
+        let roulette = [0, 7, 14, 21]
+        let start = SyntheticScreen.randomBoard(S65, seed: 43)
+        func spun(_ b: Board, _ turn: Int) -> Board {
+            var x = b
+            let cycle: [OrbKind] = [.fire, .water, .wood, .light, .dark, .heart]
+            for (n, i) in roulette.enumerated() { x.cells[i] = cycle[(turn + n) % cycle.count] }
+            return x
+        }
+        // 見ないマスを設定したとき：何回色が変わっても再計算しない
+        let s = LiveSession()
+        s.begin()
+        s.setIgnored(roulette)
+        XCTAssertTrue(feedStable(s, spun(start, 0)))
+        let solved = Board(size: S65, cells: s.stableCells!)
+        for i in roulette { XCTAssertEqual(solved.cells[i], .unknown, "見ないマスは不明として計算する") }
+        let c = BoardConstraints(size: S65, hidden: roulette)
+        let route = Solver.solve(solved, options: SolverOptions(maxSteps: 20, timeLimit: nil, beamWidth: 200, constraints: c))
+        var tracker = RouteTracker(board: solved, path: route.path)!
+        tracker.ignored = Set(roulette)
+        s.setRoute(boards: tracker.boards)
+        for turn in 1...6 {
+            XCTAssertFalse(feedStable(s, spun(start, turn)), "ルーレットが \(turn) 回変わっても再計算しない")
+        }
+        // 途中まで動かした盤面でも、ルーレットの色にかかわらず進み具合が分かる
+        var moving = spun(start, 3)
+        for k in 1...min(3, route.steps) { moving.cells.swapAt(route.path[k - 1], route.path[k]) }
+        tracker.update(moving.cells)
+        XCTAssertFalse(tracker.offRoute)
+        XCTAssertGreaterThan(tracker.progress, 0)
+        // 次の盤面（大きく変わった）では再計算する
+        XCTAssertTrue(feedStable(s, SyntheticScreen.randomBoard(S65, seed: 77)))
+
+        // 見ないマスを設定しないと、ルーレットが変わるたびに計算し直してしまう（以前の動き）
+        let s2 = LiveSession()
+        s2.begin()
+        XCTAssertTrue(feedStable(s2, spun(start, 0)))
+        s2.setRoute(boards: RouteTracker(board: spun(start, 0), path: route.path)!.boards)
+        XCTAssertTrue(feedStable(s2, spun(start, 1)))
     }
 
     func testForceNextSolve() {

@@ -58,7 +58,8 @@ struct LatestState: Codable {
 
 enum SharedStore {
     private static let settingsKey = "settings.v1"
-    private static let learnedKey = "learned.v1"
+    /// 映像の色の変換を直したので、以前の変換で覚えた色（v1）は使わない（色がずれていて読み違えの原因になる）
+    private static let learnedKey = "learned.v2"
     private static let connectionKey = "connection.v1"
     private static let heartbeatKey = "sharing.heartbeat"
     private static var latestURL: URL { AppGroup.container.appendingPathComponent("latest.json") }

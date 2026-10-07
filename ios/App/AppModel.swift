@@ -226,12 +226,22 @@ final class AppModel: ObservableObject {
         settings.constraints = (c?.isEmpty ?? true) ? nil : c
         progress = nil
         offRoute = false
-        if board != nil { resolve() }
-        if sharing { SharedStore.requestForceSolve() }
+        if sharing && !edited && !showingSample {
+            // 画面共有中は、画面共有側だけで計算し直す（アプリ側でも別に計算すると、
+            // 2つのルートが交互に表示されて操作の順番が変わってしまう）
+            SharedStore.requestForceSolve()
+        } else if board != nil {
+            resolve()
+        }
     }
 
     var lowConfidenceCount: Int { confidence.filter { $0 < BoardReading.lowConfidence }.count }
-    var unknownCount: Int { board?.unknownCount ?? 0 }
+    /// 不明なマスの数（雲・ルーレットに指定したマスは数えない）
+    var unknownCount: Int {
+        guard let b = board else { return 0 }
+        let hidden = Set(activeConstraints?.hidden ?? [])
+        return b.cells.indices.filter { b.cells[$0] == .unknown && !hidden.contains($0) }.count
+    }
 
     // MARK: PC との接続
 
