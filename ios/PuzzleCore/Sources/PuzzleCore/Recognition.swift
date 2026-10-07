@@ -361,7 +361,7 @@ public enum BoardReader {
             var conf = 0.0
             if f.darkRatio >= 0.6 && f.colorfulRatio < 0.2 {
                 // 黒く覆われたドロップ（暗闇など）：色は分からないが、ドロップはある。動かせるが消えないものとして計算する
-                cells.append(CellReading(kind: .unknown, confidence: 0.8, color: f.color, covered: true))
+                cells.append(CellReading(kind: .unknown, confidence: 0.9, color: f.color, covered: true))
                 continue
             } else if let h = f.hue, f.colorfulRatio >= 0.35 {
                 let (k, d, second) = nearestKind(h, centers: centers)
