@@ -320,7 +320,10 @@ final class PuzzleRouteUITests: XCTestCase {
     @discardableResult
     private func show(_ e: XCUIElement, in app: XCUIApplication) -> Bool {
         if e.exists && e.isHittable { return true }
-        return revealAbove(e, in: app, maxSwipes: 6) || reveal(e, in: app)
+        // 上下どちらにあるか分からないので、上→下→上の順に探す（小さい画面・遅い CI でも見つかるように）
+        if revealAbove(e, in: app, maxSwipes: 10) { return true }
+        if reveal(e, in: app, maxSwipes: 10) && e.isHittable { return true }
+        return revealAbove(e, in: app, maxSwipes: 12)
     }
 
     private func waitLabel(_ e: XCUIElement, contains text: String, timeout: Double = 15) -> Bool {
