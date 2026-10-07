@@ -416,7 +416,31 @@ public enum BoardReader {
                 }
             }
         }
-        // 2. 水がない盤面でも、盤面の色ドロップの典型よりはっきりくすんだ青はお邪魔
+        // 2. 明るさでも分ける：実機のお邪魔は紺色で暗い（明るさ 0.4 前後）。水は明るい（0.8 前後）。色相はほぼ同じ
+        let blue2 = cells.indices.filter { cells[$0].kind == .water && !learnedHit.contains($0) }
+        if blue2.count >= 2 {
+            let sorted = blue2.map { (feats[$0].meanV, $0) }.sorted { $0.0 < $1.0 }
+            var gap = 0.0, at = -1
+            for j in 0..<(sorted.count - 1) where sorted[j + 1].0 - sorted[j].0 > gap {
+                gap = sorted[j + 1].0 - sorted[j].0; at = j
+            }
+            if at >= 0 {
+                let upper = sorted[(at + 1)...].map { $0.0 }
+                let upperMean = upper.reduce(0, +) / Double(upper.count)
+                if gap >= 0.2 && sorted[at].0 <= 0.6 && upperMean >= 0.65 {
+                    for (_, i) in sorted[...at] { cells[i].kind = .jammer; cells[i].confidence = 0.85 }
+                }
+            }
+        }
+        // 水がない盤面でも：盤面の色ドロップの典型的な明るさよりはっきり暗い青はお邪魔
+        let vivV = feats.filter { $0.hue != nil && $0.colorfulRatio >= 0.45 }.map { $0.meanV }.sorted()
+        let typicalV = vivV.count >= 6 ? vivV[vivV.count / 2] : 0.8
+        for i in cells.indices where cells[i].kind == .water && !learnedHit.contains(i)
+            && feats[i].meanV < min(0.6, typicalV * 0.65) {
+            cells[i].kind = .jammer
+            cells[i].confidence = 0.85
+        }
+        // 3. 水がない盤面でも、盤面の色ドロップの典型よりはっきりくすんだ青はお邪魔
         for i in cells.indices where cells[i].kind == .water && !learnedHit.contains(i) && feats[i].meanS < min(0.5, typicalS * 0.8) {
             cells[i].kind = .jammer
             cells[i].confidence = 0.6
@@ -516,9 +540,7 @@ public enum BoardDetector {
         var best: (q: Double, reading: BoardReading)?
         for rect in pool {
             let rd = BoardReader.read(src, rect: rect, classifier: classifier)
-            // 盤面は画面の下のほうにある。下端が画面の 85% より上にある候補は少しだけ不利にする
-            let bottom = (rect.y + rect.height) / H
-            let q = quality(rd) - 0.5 * max(0, 0.85 - bottom)
+            let q = placementScore(rd, screenHeight: H)
             if best == nil || q > best!.q { best = (q, rd) }
         }
         guard let b = best, b.reading.isUsable else { return nil }
@@ -564,6 +586,13 @@ public enum BoardDetector {
     static let uniformOffsets: [(Double, Double)] = (0..<8).map {
         let a = Double($0) * Double.pi / 4
         return (0.25 * cos(a), 0.25 * sin(a))
+    }
+
+    /// 位置の良さ：はっきり読めること＋盤面は画面の下のほうにあること（実機では下端が画面の 95% 前後）。
+    /// 下端が画面の 85% より上にある候補は不利にする（盤面の上の背景やアイコンを盤面と間違えないように）
+    public static func placementScore(_ r: BoardReading, screenHeight H: Double) -> Double {
+        let bottom = (r.rect.y + r.rect.height) / max(1, H)
+        return quality(r) - 1.0 * max(0, 0.85 - bottom)
     }
 
     /// 読み取り結果のはっきりさ（大きいほど、本物の盤面にぴったり合っている）

@@ -109,7 +109,8 @@ final class SampleHandler: RPBroadcastSampleHandler {
             lastDetect = t
             if let better = BoardDetector.detect(src, fixedSize: settings.fixedSize, classifier: classifier),
                Self.differs(better.rect, r),
-               BoardDetector.quality(better) > BoardDetector.quality(reading) + 0.03 {
+               BoardDetector.placementScore(better, screenHeight: Double(src.height))
+                > BoardDetector.placementScore(reading, screenHeight: Double(src.height)) + 0.03 {
                 rect = better.rect
                 session.forceNextSolve()
                 return

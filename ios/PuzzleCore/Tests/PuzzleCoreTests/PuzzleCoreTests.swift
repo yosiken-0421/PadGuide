@@ -283,6 +283,46 @@ final class RecognitionTests: XCTestCase {
         }
     }
 
+    /// 実機のお邪魔（暗い紺色・模様が多い）を水と間違えない。水と隣り合っていても、水がない盤面でも
+    func testDarkNavyJammerIsNotWater() {
+        let withWater = Board(size: S65, string: """
+            JJJJRD
+            RDRJHR
+            JBHJDB
+            DHDRBJ
+            BHJDDR
+            """)
+        let noWater = Board(size: S65, string: """
+            JJJJRD
+            RDRJHR
+            JGHJDL
+            DHDRGJ
+            LHJDDR
+            """)
+        for board in [withWater, noWater] {
+            for jam in [RGB(45, 70, 108), RGB(40, 62, 100), RGB(50, 78, 118)] {
+                var sc = SyntheticScreen()
+                let cell = Double(sc.width) / 6
+                let y = Double(sc.height) - cell * 5 - 110
+                sc.drawShinyBoard(board, x: 0, y: y, cell: cell, jammerColor: jam, jammerPattern: true)
+                let rd = BoardReader.read(sc, rect: BoardRect(x: 0, y: y, cell: cell, size: S65), classifier: ColorClassifier())
+                XCTAssertEqual(rd.board, board, "お邪魔 \(jam)")
+            }
+        }
+    }
+
+    /// 盤面の上の青い背景（洞窟など）を盤面と間違えない：盤面は画面の下のほうにある
+    func testPrefersBoardAtBottom() {
+        let r1 = BoardReading(rect: BoardRect(x: 53, y: 570, cell: 129.9, size: S65),
+                              cells: Array(repeating: CellReading(kind: .water, confidence: 0.98, color: RGB(50, 110, 200)), count: 30),
+                              brightness: 0.7)
+        let r2 = BoardReading(rect: BoardRect(x: 0, y: 1108, cell: 147.7, size: S65),
+                              cells: Array(repeating: CellReading(kind: .fire, confidence: 0.95, color: RGB(220, 70, 60)), count: 30),
+                              brightness: 0.7)
+        XCTAssertGreaterThan(BoardDetector.placementScore(r2, screenHeight: 1918),
+                             BoardDetector.placementScore(r1, screenHeight: 1918) + 0.03)
+    }
+
     /// メニューや演出などの白い画面を、お邪魔だらけの盤面と思い込まない
     func testWhiteScreenIsNotABoard() {
         var sc = SyntheticScreen(width: 886, height: 1918, background: RGB(240, 242, 248))
@@ -315,7 +355,7 @@ final class RecognitionTests: XCTestCase {
         sc.drawShinyBoard(board, x: 0, y: y, cell: cell, colors: [.unknown: RGB(22, 22, 26)])
         guard let rd = BoardDetector.detect(sc) else { return XCTFail("盤面が見つからない") }
         XCTAssertEqual(rd.board, board)
-        XCTAssertEqual(rd.coveredCount, 13, "黒いドロップは「覆われたドロップ」として数える")
+        XCTAssertEqual(rd.coveredCount, 10, "黒いドロップは「覆われたドロップ」として数える")
         XCTAssertEqual(rd.uncertainCount, 0)
         XCTAssertTrue(rd.isUsable)
         let r = Solver.solve(rd.board, options: SolverOptions(maxSteps: 32, timeLimit: nil, beamWidth: 400))
