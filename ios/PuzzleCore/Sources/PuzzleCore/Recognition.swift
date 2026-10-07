@@ -132,6 +132,12 @@ public struct BoardReading: Codable, Equatable, Sendable {
         cells.isEmpty ? 0 : cells.reduce(0) { $0 + $1.confidence } / Double(cells.count)
     }
     public var unknownCount: Int { cells.filter { $0.kind == .unknown }.count }
+    /// ほとんど真っ白なマスの割合（メニュー・演出などの白い画面を盤面と間違えないため）
+    public var whiteFraction: Double {
+        guard !cells.isEmpty else { return 0 }
+        let n = cells.filter { let h = $0.color.hsv; return h.s < 0.08 && h.v > 0.85 }.count
+        return Double(n) / Double(cells.count)
+    }
     public static let lowConfidence = 0.5
     public var lowConfidenceIndices: [Int] {
         cells.indices.filter { cells[$0].confidence < Self.lowConfidence }
@@ -140,7 +146,7 @@ public struct BoardReading: Codable, Equatable, Sendable {
     public var isDark: Bool { brightness < 0.2 }
     /// ルートを確定してよい状態か（暗い・不明が多い・信頼度が低いときは確定しない）
     public var isUsable: Bool {
-        !isDark && averageConfidence >= 0.55 && unknownCount <= max(2, cells.count / 10)
+        !isDark && averageConfidence >= 0.55 && unknownCount <= max(2, cells.count / 10) && whiteFraction <= 0.6
     }
 }
 
@@ -325,6 +331,7 @@ public enum BoardReader {
 
         var cells: [CellReading] = []
         cells.reserveCapacity(size.count)
+        var learnedHit = Set<Int>()   // 手動修正で覚えた色で決めたマス（あとから変えない）
         var vSum = 0.0
         for f in feats {
             vSum += f.meanV
@@ -332,6 +339,7 @@ public enum BoardReader {
             if !classifier.learned.isEmpty {
                 let (k, conf) = classifier.classify(f.color)
                 if conf >= 0.95 {
+                    learnedHit.insert(cells.count)
                     cells.append(CellReading(kind: k, confidence: conf, color: f.color))
                     continue
                 }
@@ -372,6 +380,29 @@ public enum BoardReader {
             }
             if conf < 0.35 { kind = .unknown }
             cells.append(CellReading(kind: kind, confidence: (conf * 100).rounded() / 100, color: f.color))
+        }
+
+        // お邪魔は青みがかった色のことがあり、水と間違えやすい。
+        // 1. 青系のマスが「鮮やかな水」と「くすんだ青」の2つにはっきり分かれていれば、くすんだ方はお邪魔
+        let blue = cells.indices.filter { cells[$0].kind == .water && !learnedHit.contains($0) }
+        if blue.count >= 2 {
+            let sorted = blue.map { (feats[$0].meanS, $0) }.sorted { $0.0 < $1.0 }
+            var gap = 0.0, at = -1
+            for j in 0..<(sorted.count - 1) where sorted[j + 1].0 - sorted[j].0 > gap {
+                gap = sorted[j + 1].0 - sorted[j].0; at = j
+            }
+            if at >= 0 {
+                let upper = sorted[(at + 1)...].map { $0.0 }
+                let upperMean = upper.reduce(0, +) / Double(upper.count)
+                if gap >= 0.12 && sorted[at].0 <= 0.55 && upperMean >= 0.55 {
+                    for (_, i) in sorted[...at] { cells[i].kind = .jammer; cells[i].confidence = 0.6 }
+                }
+            }
+        }
+        // 2. 水がない盤面でも、盤面の色ドロップの典型よりはっきりくすんだ青はお邪魔
+        for i in cells.indices where cells[i].kind == .water && !learnedHit.contains(i) && feats[i].meanS < min(0.5, typicalS * 0.8) {
+            cells[i].kind = .jammer
+            cells[i].confidence = 0.6
         }
         return BoardReading(rect: rect, cells: cells, brightness: vSum / Double(max(1, size.count)))
     }
@@ -523,7 +554,7 @@ public enum BoardDetector {
         guard !r.cells.isEmpty else { return 0 }
         let n = Double(r.cells.count)
         let high = Double(r.cells.filter { $0.confidence >= 0.9 }.count) / n
-        return r.averageConfidence + 0.15 * high - 0.03 * Double(r.unknownCount)
+        return r.averageConfidence + 0.15 * high - 0.03 * Double(r.unknownCount) - 0.6 * max(0, r.whiteFraction - 0.4)
     }
 
     /// マスの中が鮮やか・マスの角（ドロップの外側）が暗いほど高い。1マスあたりの平均値。

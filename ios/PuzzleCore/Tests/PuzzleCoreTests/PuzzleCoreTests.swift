@@ -262,6 +262,43 @@ final class RecognitionTests: XCTestCase {
         }
     }
 
+    /// 青みがかったお邪魔（ある程度鮮やかな青灰色）を水と間違えない
+    func testBluishJammerIsNotWater() {
+        let board = Board(size: S65, string: """
+            RBGLDH
+            JBJRBG
+            LDHJBG
+            LJHRJG
+            RBGLDH
+            """)
+        for jam in [RGB(100, 125, 170), RGB(90, 120, 175), RGB(110, 135, 175), RGB(95, 130, 180), RGB(118, 128, 148)] {
+            for pattern in [true, false] {
+                var sc = SyntheticScreen()
+                let cell = Double(sc.width) / 6
+                let y = Double(sc.height) - cell * 5 - 110
+                sc.drawShinyBoard(board, x: 0, y: y, cell: cell, jammerColor: jam, jammerPattern: pattern)
+                let rd = BoardReader.read(sc, rect: BoardRect(x: 0, y: y, cell: cell, size: S65), classifier: ColorClassifier())
+                XCTAssertEqual(rd.board, board, "お邪魔 \(jam) 模様 \(pattern)")
+            }
+        }
+    }
+
+    /// メニューや演出などの白い画面を、お邪魔だらけの盤面と思い込まない
+    func testWhiteScreenIsNotABoard() {
+        var sc = SyntheticScreen(width: 886, height: 1918, background: RGB(240, 242, 248))
+        let cell = 177.2
+        for r in 0..<4 {
+            for c in 0..<5 {
+                let col = r == 0 && c > 1 ? RGB(52, 110, 178) : RGB(232, 234, 240)
+                sc.fillCircle(cx: (Double(c) + 0.5) * cell, cy: 672 + (Double(r) + 0.5) * cell, r: cell * 0.45, col)
+            }
+        }
+        let rd = BoardReader.read(sc, rect: BoardRect(x: 0, y: 672, cell: cell, size: .fiveByFour), classifier: ColorClassifier())
+        XCTAssertGreaterThan(rd.whiteFraction, 0.6)
+        XCTAssertFalse(rd.isUsable, "白い画面ではルートを出さない")
+        XCTAssertNil(BoardDetector.detect(sc))
+    }
+
     /// 読めた盤面の信頼度は高く、黄色枠（自信がないマス）が出ない
     func testConfidenceIsHighForClearOrbs() {
         let board = SyntheticScreen.randomBoard(S65, seed: 140)
