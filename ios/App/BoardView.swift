@@ -37,6 +37,8 @@ struct BoardView: View {
     var progress: Int? = nil
     /// 敵の妨害の縛り（マスに印を付ける）
     var constraints: BoardConstraints? = nil
+    /// 黒く覆われて色が見えないマス（暗闇など）
+    var covered: Set<Int> = []
     var onTapCell: ((Int) -> Void)?
 
     var body: some View {
@@ -80,11 +82,13 @@ struct BoardView: View {
             let bg: Color = even ? Color(red: 0.16, green: 0.20, blue: 0.31) : Color(red: 0.18, green: 0.23, blue: 0.34)
             ctx.fill(Path(rect), with: .color(bg))
             let k = board.cells[i]
-            ctx.fill(Path(ellipseIn: rect.insetBy(dx: cell * 0.1, dy: cell * 0.1)), with: .color(OrbStyle.color(k)))
-            ctx.draw(Text(OrbStyle.mark(k)).font(.system(size: cell * 0.3, weight: .heavy)).foregroundColor(.white),
+            let isCovered = k == .unknown && covered.contains(i)
+            ctx.fill(Path(ellipseIn: rect.insetBy(dx: cell * 0.1, dy: cell * 0.1)),
+                     with: .color(isCovered ? Color(red: 0.08, green: 0.08, blue: 0.1) : OrbStyle.color(k)))
+            ctx.draw(Text(isCovered ? "暗" : OrbStyle.mark(k)).font(.system(size: cell * 0.3, weight: .heavy)).foregroundColor(.white),
                      at: CGPoint(x: rect.midX, y: rect.midY))
             let conf = i < confidence.count ? confidence[i] : 1
-            if conf < BoardReading.lowConfidence || k == .unknown {   // 自信がないマスは黄色枠
+            if !isCovered && (conf < BoardReading.lowConfidence || k == .unknown) {   // 自信がないマスは黄色枠
                 ctx.stroke(Path(rect.insetBy(dx: 2, dy: 2)), with: .color(.yellow), lineWidth: max(2, cell * 0.06))
             }
         }

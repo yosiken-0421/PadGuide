@@ -108,6 +108,12 @@ public struct CellReading: Codable, Equatable, Sendable {
     public var confidence: Double
     /// マス中央付近の平均色（手動修正の学習用。PC へは送らない）
     public var color: RGB
+    /// 黒く覆われて色が見えないドロップ（暗闇など）。色は「不明」だが、読み取りの失敗ではない
+    public var covered: Bool?
+
+    public init(kind: OrbKind, confidence: Double, color: RGB, covered: Bool? = nil) {
+        self.kind = kind; self.confidence = confidence; self.color = color; self.covered = covered
+    }
 }
 
 /// 画面上の盤面の位置（ピクセル）
@@ -132,6 +138,10 @@ public struct BoardReading: Codable, Equatable, Sendable {
         cells.isEmpty ? 0 : cells.reduce(0) { $0 + $1.confidence } / Double(cells.count)
     }
     public var unknownCount: Int { cells.filter { $0.kind == .unknown }.count }
+    /// 黒く覆われたドロップ（暗闇など）の数
+    public var coveredCount: Int { cells.filter { $0.covered == true }.count }
+    /// 読み取りに失敗した不明マスの数（覆われたドロップは数えない）
+    public var uncertainCount: Int { cells.filter { $0.kind == .unknown && $0.covered != true }.count }
     /// ほとんど真っ白なマスの割合（メニュー・演出などの白い画面を盤面と間違えないため）
     public var whiteFraction: Double {
         guard !cells.isEmpty else { return 0 }
@@ -146,7 +156,8 @@ public struct BoardReading: Codable, Equatable, Sendable {
     public var isDark: Bool { brightness < 0.2 }
     /// ルートを確定してよい状態か（暗い・不明が多い・信頼度が低いときは確定しない）
     public var isUsable: Bool {
-        !isDark && averageConfidence >= 0.55 && unknownCount <= max(2, cells.count / 10) && whiteFraction <= 0.6
+        !isDark && averageConfidence >= 0.55 && uncertainCount <= max(2, cells.count / 10) && whiteFraction <= 0.6
+            && Double(coveredCount) <= Double(cells.count) * 0.7
     }
 }
 
@@ -168,6 +179,8 @@ public enum BoardReader {
         var tintHue: Double?
         /// ドロップ全体（暗い縁を除く）の平均彩度
         var bodyS: Double
+        /// とても暗い画素の割合（黒く覆われたドロップの見分け用）
+        var darkRatio: Double
         var meanV: Double
         var meanS: Double
         var hueSpread: Double     // 色相のばらつき（0=そろっている〜1）
@@ -190,7 +203,7 @@ public enum BoardReader {
         var vs = 0.0, ss = 0.0
         var cr = 0, cg = 0, cb = 0, cn = 0
         var tx = 0.0, ty = 0.0, tw = 0.0
-        var bodyS = 0.0, bodyN = 0
+        var bodyS = 0.0, bodyN = 0, dark = 0
         var gr = 0, gg = 0, gb = 0, gn = 0
         let rings: [(Double, Int)] = [(0.0, 1), (0.1, 6), (0.19, 8), (0.28, 10), (0.35, 12)]
         for (radius, count) in rings {
@@ -218,7 +231,7 @@ public enum BoardReader {
                     ty += sin(h * Double.pi / 180) * sat
                     tw += sat
                 }
-                if v >= 0.22 { bodyS += sat; bodyN += 1 }
+                if v >= 0.22 { bodyS += sat; bodyN += 1 } else { dark += 1 }
                 if v >= 0.30 { gr += Int(c.r); gg += Int(c.g); gb += Int(c.b); gn += 1 }
             }
         }
@@ -251,7 +264,7 @@ public enum BoardReader {
         return CellFeature(hue: hue, colorfulRatio: Double(colorful) / Double(total),
                            greyBrightRatio: Double(greyBright) / Double(total),
                            greyRatio: Double(grey) / Double(total),
-                           tintHue: tint, bodyS: bodyN > 0 ? bodyS / Double(bodyN) : 0,
+                           tintHue: tint, bodyS: bodyN > 0 ? bodyS / Double(bodyN) : 0, darkRatio: Double(dark) / Double(total),
                            meanV: colorful > 0 ? vs / Double(colorful) : color.hsv.v,
                            meanS: colorful > 0 ? ss / Double(colorful) : color.hsv.s,
                            hueSpread: spread, color: color)
@@ -346,7 +359,11 @@ public enum BoardReader {
             }
             var kind = OrbKind.unknown
             var conf = 0.0
-            if let h = f.hue, f.colorfulRatio >= 0.35 {
+            if f.darkRatio >= 0.6 && f.colorfulRatio < 0.2 {
+                // 黒く覆われたドロップ（暗闇など）：色は分からないが、ドロップはある。動かせるが消えないものとして計算する
+                cells.append(CellReading(kind: .unknown, confidence: 0.8, color: f.color, covered: true))
+                continue
+            } else if let h = f.hue, f.colorfulRatio >= 0.35 {
                 let (k, d, second) = nearestKind(h, centers: centers)
                 kind = k
                 // 近さ・他の色との差・色のそろい具合・鮮やかな画素の割合から信頼度を決める
@@ -554,7 +571,7 @@ public enum BoardDetector {
         guard !r.cells.isEmpty else { return 0 }
         let n = Double(r.cells.count)
         let high = Double(r.cells.filter { $0.confidence >= 0.9 }.count) / n
-        return r.averageConfidence + 0.15 * high - 0.03 * Double(r.unknownCount) - 0.6 * max(0, r.whiteFraction - 0.4)
+        return r.averageConfidence + 0.15 * high - 0.03 * Double(r.uncertainCount) - 0.6 * max(0, r.whiteFraction - 0.4)
     }
 
     /// マスの中が鮮やか・マスの角（ドロップの外側）が暗いほど高い。1マスあたりの平均値。

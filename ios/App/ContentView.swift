@@ -134,7 +134,7 @@ struct ContentView: View {
                         .accessibilityIdentifier("sampleBoardNotice")
                 }
                 BoardView(board: b, confidence: model.confidence, result: model.result, progress: model.progress,
-                          constraints: model.activeConstraints) { i in
+                          constraints: model.activeConstraints, covered: model.coveredCells) { i in
                     if model.tapCell(i) {
                         editingCell = i
                         showPicker = true

@@ -299,6 +299,29 @@ final class RecognitionTests: XCTestCase {
         XCTAssertNil(BoardDetector.detect(sc))
     }
 
+    /// 黒く覆われて色が見えないドロップ（暗闇など）が多くても、盤面として読める（以前は「盤面が見つかりません」になっていた）
+    func testCoveredBlackOrbs() {
+        let board = Board(size: S65, string: """
+            LRDR??
+            GHH?HG
+            HDLH?R
+            RHGR??
+            ??HR??
+            """)
+        var sc = SyntheticScreen()
+        let cell = Double(sc.width) / 6
+        let y = Double(sc.height) - cell * 5 - 110
+        sc.drawDecoyRow(y: Int(y) - 300, size: Int(cell * 0.85))
+        sc.drawShinyBoard(board, x: 0, y: y, cell: cell, colors: [.unknown: RGB(22, 22, 26)])
+        guard let rd = BoardDetector.detect(sc) else { return XCTFail("盤面が見つからない") }
+        XCTAssertEqual(rd.board, board)
+        XCTAssertEqual(rd.coveredCount, 13, "黒いドロップは「覆われたドロップ」として数える")
+        XCTAssertEqual(rd.uncertainCount, 0)
+        XCTAssertTrue(rd.isUsable)
+        let r = Solver.solve(rd.board, options: SolverOptions(maxSteps: 32, timeLimit: nil, beamWidth: 400))
+        XCTAssertGreaterThan(r.result.combos, 0, "見えているドロップでルートを出す")
+    }
+
     /// 読めた盤面の信頼度は高く、黄色枠（自信がないマス）が出ない
     func testConfidenceIsHighForClearOrbs() {
         let board = SyntheticScreen.randomBoard(S65, seed: 140)

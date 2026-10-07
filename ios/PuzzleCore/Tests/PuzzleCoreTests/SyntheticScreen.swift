@@ -92,7 +92,7 @@ struct SyntheticScreen: PixelSource {
                 let x0 = Int(x + Double(c) * cell), y0 = Int(y + Double(r) * cell)
                 fillRect(x: x0, y: y0, w: Int(cell) + 1, h: Int(cell) + 1, tile)
                 let kind = board[r, c]
-                guard let pal = Self.palette[kind] else { continue }
+                guard let pal = colors[kind] ?? Self.palette[kind] else { continue }
                 let base0 = colors[kind] ?? (kind == .jammer ? (jammerColor ?? pal) : pal)
                 let base = Self.adjust(base0, hueShift: hueShift, valueScale: valueScale)
                 let (bh, bs, bv) = base.hsv
@@ -120,6 +120,10 @@ struct SyntheticScreen: PixelSource {
                     let mx = Int(cx + cell * 0.22), my = Int(cy + cell * 0.22), t = Int(cell * 0.04)
                     fillRect(x: mx - t * 3, y: my - t / 2, w: t * 6, h: t, RGB(255, 255, 255))
                     fillRect(x: mx - t / 2, y: my - t * 3, w: t, h: t * 6, RGB(255, 255, 255))
+                }
+                if kind == .unknown && colors[.unknown] != nil {
+                    // 黒く覆われたドロップ：上のほうに小さな赤い数字のような印（独自デザイン）
+                    fillRect(x: Int(cx - cell * 0.03), y: Int(cy - cell * 0.3), w: Int(cell * 0.06), h: Int(cell * 0.12), RGB(220, 30, 30))
                 }
                 if kind == .jammer && jammerPattern {
                     // 暗い「×」の模様（独自デザイン）
