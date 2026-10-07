@@ -103,7 +103,7 @@ final class SampleHandler: RPBroadcastSampleHandler {
                 rect = nil
                 session.invalidate()
             }
-            reportStatus(reading.isDark ? "dark" : "invalid", t)
+            reportStatus(reading.isDark || reading.dimmed == true ? "dark" : "invalid", t)
             return
         }
         badFrames = 0

@@ -367,6 +367,32 @@ final class RecognitionTests: XCTestCase {
         XCTAssertEqual(BoardDetector.detect(sc)?.board, board, "ゲームの盤面を読む")
     }
 
+    /// 盤面全体が暗く色が薄いとき（敵の行動中など）はルートを出さない。暗めなだけ・色が薄いだけなら読む
+    func testDimmedBoardIsNotUsable() {
+        let board = SyntheticScreen.randomBoard(S65, seed: 190)
+        func reading(scale: Double, sat: Double) -> BoardReading {
+            var colors: [OrbKind: RGB] = [:]
+            for (k, c) in SyntheticScreen.palette {
+                let (h, s, v) = c.hsv
+                colors[k] = SyntheticScreen.hsvToRGB(h, s * sat, v * scale)
+            }
+            var sc = SyntheticScreen()
+            let cell = Double(sc.width) / 6
+            let y = Double(sc.height) - cell * 5 - 110
+            sc.drawShinyBoard(board, x: 0, y: y, cell: cell, colors: colors)
+            return BoardReader.read(sc, rect: BoardRect(x: 0, y: y, cell: cell, size: S65), classifier: ColorClassifier())
+        }
+        let dim = reading(scale: 0.42, sat: 0.5)
+        XCTAssertEqual(dim.dimmed, true)
+        XCTAssertFalse(dim.isUsable, "暗く色が薄い盤面ではルートを出さない")
+        let darker = reading(scale: 0.6, sat: 1)
+        XCTAssertNil(darker.dimmed)
+        XCTAssertEqual(darker.board, board)
+        let paler = reading(scale: 1, sat: 0.55)
+        XCTAssertNil(paler.dimmed)
+        XCTAssertEqual(paler.board, board)
+    }
+
     /// メニューや演出などの白い画面を、お邪魔だらけの盤面と思い込まない
     func testWhiteScreenIsNotABoard() {
         var sc = SyntheticScreen(width: 886, height: 1918, background: RGB(240, 242, 248))

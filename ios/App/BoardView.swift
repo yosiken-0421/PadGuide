@@ -157,7 +157,7 @@ enum RouteText {
         switch s {
         case "nocombo": return "この盤面ではコンボが見つかりませんでした"
         case "unstable": return "盤面が変化中です（操作中・ルーレットなど）。止まると計算します"
-        case "dark": return "画面が暗いためルートを確定しません（暗闇など）"
+        case "dark": return "盤面が暗いためルートを確定しません（暗闇・敵の行動中など）。明るくなると計算します"
         case "invalid": return "盤面が見つかりません。パズル画面を表示してください"
         default: return ""
         }

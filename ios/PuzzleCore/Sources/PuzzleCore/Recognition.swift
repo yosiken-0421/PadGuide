@@ -131,6 +131,8 @@ public struct BoardReading: Codable, Equatable, Sendable {
     public var rect: BoardRect
     public var cells: [CellReading]
     public var brightness: Double
+    /// 盤面全体が暗く・色が薄くなっている（敵の行動中などでパズルできない状態）。この間はルートを出さない
+    public var dimmed: Bool? = nil
 
     public var size: BoardSize { rect.size }
     public var board: Board { Board(size: rect.size, cells: cells.map { $0.kind }) }
@@ -156,7 +158,7 @@ public struct BoardReading: Codable, Equatable, Sendable {
     public var isDark: Bool { brightness < 0.2 }
     /// ルートを確定してよい状態か（暗い・不明が多い・信頼度が低いときは確定しない）
     public var isUsable: Bool {
-        !isDark && averageConfidence >= 0.55 && uncertainCount <= max(2, cells.count / 10) && whiteFraction <= 0.6
+        !isDark && dimmed != true && averageConfidence >= 0.55 && uncertainCount <= max(2, cells.count / 10) && whiteFraction <= 0.6
             && Double(coveredCount) <= Double(cells.count) * 0.7
     }
 }
@@ -181,6 +183,8 @@ public enum BoardReader {
         var bodyS: Double
         /// とても暗い画素の割合（黒く覆われたドロップの見分け用）
         var darkRatio: Double
+        /// ドロップ全体（暗い縁を除く）の平均の明るさ
+        var bodyV: Double
         var meanV: Double
         var meanS: Double
         var hueSpread: Double     // 色相のばらつき（0=そろっている〜1）
@@ -203,7 +207,7 @@ public enum BoardReader {
         var vs = 0.0, ss = 0.0
         var cr = 0, cg = 0, cb = 0, cn = 0
         var tx = 0.0, ty = 0.0, tw = 0.0
-        var bodyS = 0.0, bodyN = 0, dark = 0
+        var bodyS = 0.0, bodyV = 0.0, bodyN = 0, dark = 0
         var gr = 0, gg = 0, gb = 0, gn = 0
         let rings: [(Double, Int)] = [(0.0, 1), (0.1, 6), (0.19, 8), (0.28, 10), (0.35, 12)]
         for (radius, count) in rings {
@@ -231,7 +235,7 @@ public enum BoardReader {
                     ty += sin(h * Double.pi / 180) * sat
                     tw += sat
                 }
-                if v >= 0.22 { bodyS += sat; bodyN += 1 } else { dark += 1 }
+                if v >= 0.22 { bodyS += sat; bodyV += v; bodyN += 1 } else { dark += 1 }
                 if v >= 0.30 { gr += Int(c.r); gg += Int(c.g); gb += Int(c.b); gn += 1 }
             }
         }
@@ -265,6 +269,7 @@ public enum BoardReader {
                            greyBrightRatio: Double(greyBright) / Double(total),
                            greyRatio: Double(grey) / Double(total),
                            tintHue: tint, bodyS: bodyN > 0 ? bodyS / Double(bodyN) : 0, darkRatio: Double(dark) / Double(total),
+                           bodyV: bodyN > 0 ? bodyV / Double(bodyN) : 0,
                            meanV: colorful > 0 ? vs / Double(colorful) : color.hsv.v,
                            meanS: colorful > 0 ? ss / Double(colorful) : color.hsv.s,
                            hueSpread: spread, color: color)
@@ -449,7 +454,12 @@ public enum BoardReader {
             cells[i].kind = .jammer
             cells[i].confidence = 0.6
         }
-        return BoardReading(rect: rect, cells: cells, brightness: vSum / Double(max(1, size.count)))
+        // 盤面全体が暗く色が薄い（実機で、敵の行動中などに盤面が暗くなったとき：明るさ 0.34・鮮やかさ 0.30 前後。
+        // 通常は明るさ 0.67〜0.76・鮮やかさ 0.43〜0.59）
+        let bv = feats.map { $0.bodyV }.sorted()[feats.count / 2]
+        let bsMed = feats.map { $0.bodyS }.sorted()[feats.count / 2]
+        let dimmed = bv < 0.45 && bsMed < 0.4
+        return BoardReading(rect: rect, cells: cells, brightness: vSum / Double(max(1, size.count)), dimmed: dimmed ? true : nil)
     }
 
     /// 彩度の低い色のマスをお邪魔と判断するか（紫系＝毒・猛毒は除く）
