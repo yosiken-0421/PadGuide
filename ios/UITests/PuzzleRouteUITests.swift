@@ -39,6 +39,7 @@ final class PuzzleRouteUITests: XCTestCase {
         XCTAssertTrue(app.buttons["qrConnectButton"].exists, "QR コードで接続できる")
         XCTAssertTrue(app.buttons["discoverButton"].exists, "同じ Wi-Fi の PC を探せる")
         XCTAssertTrue(app.staticTexts["emptyBoard"].exists, "盤面がないときの案内")
+        XCTAssertTrue(reveal(app.buttons["screenshotButton"], in: app), "スクショから読み取るボタンがある")
 
         // 注意書き（一番下）
         let notice = app.staticTexts["disclaimer"]

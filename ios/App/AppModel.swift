@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import UIKit
 import Network
 import PuzzleCore
 
@@ -30,6 +31,13 @@ final class AppModel: ObservableObject {
     @Published private(set) var correctionNote: String?
     /// 画面共有なしでも動作を確認できる、アプリ独自配色の見本盤面
     @Published private(set) var showingSample = false
+    /// スクリーンショットを読み取っている最中
+    @Published private(set) var readingScreenshot = false
+    /// 盤面まわりのお知らせ（スクショの読み取り・診断情報のコピー）
+    @Published private(set) var boardMessage: String?
+    /// 診断用：最後に読み取った盤面（画像は持たない）と、その入力元
+    private var screenshotReading: BoardReading?
+    private var screenshotSize: (Int, Int)?
 
     private var colors: [RGB] = []
     /// UI テスト用：見本盤面で「何手目まで進んだか」を指定する（-demoProgress N）
@@ -179,6 +187,7 @@ final class AppModel: ObservableObject {
 
     func revertToAuto() {
         edited = false
+        screenshotReading = nil
         correctionNote = nil
         if let l = latest { apply(l) } else { board = nil; result = nil }
     }
@@ -274,6 +283,80 @@ final class AppModel: ObservableObject {
         await PCLink.bye()
         connection = nil
         connectionMessage = "切断しました"
+    }
+
+    // MARK: スクリーンショットから読み取る（端末内だけで解析し、画像は保存も送信もしない）
+
+    func importScreenshot(_ data: Data) {
+        readingScreenshot = true
+        boardMessage = nil
+        let size = settings.fixedSize
+        let cls = ColorClassifier(learned: SharedStore.loadLearned())
+        Task.detached(priority: .userInitiated) {
+            let decoded = AppModel.decode(data)
+            let imageSize = decoded.map { ($0.width, $0.height) }
+            let reading = decoded.flatMap { BoardDetector.detect($0, fixedSize: size, classifier: cls) }
+            await MainActor.run {
+                self.readingScreenshot = false
+                guard let imageSize else {
+                    self.boardMessage = "画像を読み込めませんでした"
+                    return
+                }
+                guard let rd = reading else {
+                    self.boardMessage = "スクリーンショットから盤面が見つかりませんでした。パズル画面のスクリーンショットを選んでください（盤面サイズを手動で選ぶと見つかることがあります）"
+                    return
+                }
+                self.cancelFlag?.cancel()
+                self.showingSample = false
+                self.screenshotReading = rd
+                self.screenshotSize = imageSize
+                self.board = rd.board
+                self.confidence = rd.cells.map { $0.confidence }
+                self.colors = rd.cells.map { $0.color }
+                self.progress = nil
+                self.offRoute = false
+                self.correctionNote = nil
+                self.edited = true    // 画面共有の結果で上書きしない
+                self.boardMessage = "スクリーンショットの盤面を読み取りました（画像は保存していません）"
+                self.resolve()
+            }
+        }
+    }
+
+    /// 画像を RGBA の画素に直す（sRGB）
+    nonisolated static func decode(_ data: Data) -> RGBAImageSource? {
+        guard let img = UIImage(data: data)?.cgImage else { return nil }
+        let w = img.width, h = img.height
+        guard w > 0, h > 0, w * h <= 40_000_000 else { return nil }
+        var px = [UInt8](repeating: 0, count: w * h * 4)
+        let ok: Bool = px.withUnsafeMutableBytes { buf in
+            guard let ctx = CGContext(data: buf.baseAddress, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
+                                      space: CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB(),
+                                      bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else { return false }
+            ctx.draw(img, in: CGRect(x: 0, y: 0, width: w, height: h))
+            return true
+        }
+        guard ok else { return nil }
+        return RGBAImageSource(width: w, height: h, rowBytes: w * 4, bytes: px)
+    }
+
+    /// 診断情報（各マスの判定と代表色の数値だけ。画像は含まない）
+    var diagnosticsText: String? {
+        if let r = screenshotReading {
+            return RecognitionDiagnostics.text(r, source: "スクリーンショット", imageSize: screenshotSize)
+        }
+        guard let l = latest, let r = l.reading else { return nil }
+        let size = l.frameSize.flatMap { $0.count == 2 ? ($0[0], $0[1]) : nil }
+        return RecognitionDiagnostics.text(r, source: "画面共有 " + (l.videoFormat ?? ""), imageSize: size)
+    }
+
+    func copyDiagnostics() {
+        guard let t = diagnosticsText else {
+            boardMessage = "まだ読み取った盤面がありません"
+            return
+        }
+        UIPasteboard.general.string = t
+        boardMessage = "診断情報をコピーしました。チャットに貼り付けて送ってください（画像は含まれていません）"
     }
 
     // MARK: 見本盤面

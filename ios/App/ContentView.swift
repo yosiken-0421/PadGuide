@@ -1,4 +1,5 @@
 import SwiftUI
+import PhotosUI
 import PuzzleCore
 
 @main
@@ -22,6 +23,7 @@ struct ContentView: View {
     @State private var showDiscovery = false
     @State private var editingCell: Int?
     @State private var showPicker = false
+    @State private var photoItem: PhotosPickerItem?
 
     static let disclaimer = "画面共有はユーザーが開始した場合だけ動作します。画面は端末内または同一ネットワーク内で処理されます。本アプリは操作を自動実行しません。利用するサービスの規約を確認したうえで使用してください。"
 
@@ -195,6 +197,7 @@ struct ContentView: View {
                 }
                 .accessibilityIdentifier("sampleBoardButton")
             }
+            screenshotRow
             if model.sharing {
                 Button("今の画面で計算し直す") { model.recalcFromScreen() }
                     .buttonStyle(.borderless)
@@ -204,6 +207,30 @@ struct ContentView: View {
             Text("盤面とルート")
         } footer: {
             Text("ルートを表示した後は、ドロップを動かしている間もルートを変えずに表示し続けます。コンボで消えて次の盤面になると、自動で計算し直します。黄色い枠は認識に自信がないマスです。タップすると正しい色に直せます（見た目が近いマスもまとめて直します）。直した色の傾向はこの iPhone の中だけに保存され、次の盤面からは同じ見た目のドロップを正しく読みます。")
+        }
+    }
+
+    /// スクリーンショットから読み取る・診断情報をコピー
+    @ViewBuilder private var screenshotRow: some View {
+        PhotosPicker(selection: $photoItem, matching: .images) {
+            Label(model.readingScreenshot ? "読み取っています…" : "スクショから読み取る", systemImage: "photo")
+        }
+        .disabled(model.readingScreenshot)
+        .accessibilityIdentifier("screenshotButton")
+        .onChange(of: photoItem) { _, item in
+            guard let item else { return }
+            Task {
+                if let data = try? await item.loadTransferable(type: Data.self) { model.importScreenshot(data) }
+                photoItem = nil
+            }
+        }
+        if model.diagnosticsText != nil {
+            Button { model.copyDiagnostics() } label: { Label("診断情報をコピー", systemImage: "doc.on.doc") }
+                .buttonStyle(.borderless)
+                .accessibilityIdentifier("copyDiagnostics")
+        }
+        if let m = model.boardMessage {
+            Text(m).font(.footnote).foregroundStyle(.secondary).accessibilityIdentifier("screenshotMessage")
         }
     }
 

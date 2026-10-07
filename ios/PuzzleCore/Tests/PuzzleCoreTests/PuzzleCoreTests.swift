@@ -269,6 +269,28 @@ final class RecognitionTests: XCTestCase {
         XCTAssertEqual(YCbCrConverter.defaultMatrix(height: 2532), .bt709)
     }
 
+    /// スクリーンショット（RGBA の画素）からも盤面を読める。診断情報には画像を含めず、各マスの数値だけを書く
+    func testScreenshotSourceAndDiagnostics() {
+        let board = SyntheticScreen.randomBoard(S65, seed: 160, kinds: [.fire, .water, .wood, .light, .dark, .heart, .jammer])
+        let sc = shinyScreen(board)
+        var rgba = [UInt8](repeating: 255, count: sc.width * sc.height * 4)
+        for y in 0..<sc.height {
+            for x in 0..<sc.width {
+                let p = sc.rgb(x, y), i = (y * sc.width + x) * 4
+                rgba[i] = p.0; rgba[i + 1] = p.1; rgba[i + 2] = p.2
+            }
+        }
+        guard let src = RGBAImageSource(width: sc.width, height: sc.height, rowBytes: sc.width * 4, bytes: rgba),
+              let rd = BoardDetector.detect(src) else { return XCTFail("スクリーンショットから盤面が見つからない") }
+        XCTAssertEqual(rd.board, board)
+        let text = RecognitionDiagnostics.text(rd, source: "スクリーンショット", imageSize: (sc.width, sc.height))
+        XCTAssertTrue(text.contains("6x5"))
+        XCTAssertTrue(text.contains("5段目"))
+        XCTAssertTrue(text.contains("jammer") || !board.cells.contains(.jammer))
+        XCTAssertLessThan(text.utf8.count, 8_000, "画像を含まない短い文章")
+        XCTAssertNil(RGBAImageSource(width: 10, height: 10, rowBytes: 40, bytes: [0, 1, 2]), "大きさが合わないデータは使わない")
+    }
+
     func testLearnedCorrection() {
         var cls = ColorClassifier()
         let odd = RGB(200, 120, 60)   // 橙色：本来は火と判定される

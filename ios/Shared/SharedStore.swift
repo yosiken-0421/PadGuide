@@ -54,6 +54,9 @@ struct LatestState: Codable {
     var progress: Int?
     /// 操作がルートから外れた
     var offRoute: Bool?
+    /// 診断用：画面共有の映像の形式と大きさ（画像そのものは保存しない）
+    var videoFormat: String? = nil
+    var frameSize: [Int]? = nil
 }
 
 enum SharedStore {

@@ -29,6 +29,8 @@ final class SampleHandler: RPBroadcastSampleHandler {
     private var hasResult = false
     private var seq = 0
     private var cancelFlag: CancellationFlag?
+    private var videoFormat = ""
+    private var frameSize: [Int] = []
 
     private func now() -> Double { Date().timeIntervalSince1970 }
 
@@ -76,6 +78,8 @@ final class SampleHandler: RPBroadcastSampleHandler {
         CVPixelBufferLockBaseAddress(pb, .readOnly)
         defer { CVPixelBufferUnlockBaseAddress(pb, .readOnly) }
         guard let src = FrameSource(pb), src.height > src.width else { return }   // 縦画面のみ
+        let fmt = src.formatDescription
+        lock.lock(); videoFormat = fmt; frameSize = [src.width, src.height]; lock.unlock()
 
         // 盤面の位置：見失ったときだけ探し直す（1 秒に 1 回まで）
         if rect == nil || (rect?.size != settings.fixedSize && settings.fixedSize != nil) {
@@ -175,8 +179,9 @@ final class SampleHandler: RPBroadcastSampleHandler {
 
     private func publish(_ msg: ResultMessage, reading: BoardReading?, progress: Int? = nil, offRoute: Bool = false,
                          sendToPC: Bool = true) {
-        lock.lock(); seq += 1; let s = seq; lock.unlock()
-        SharedStore.writeLatest(LatestState(seq: s, reading: reading, result: msg, progress: progress, offRoute: offRoute))
+        lock.lock(); seq += 1; let s = seq; let vf = videoFormat; let fs = frameSize; lock.unlock()
+        SharedStore.writeLatest(LatestState(seq: s, reading: reading, result: msg, progress: progress, offRoute: offRoute,
+                                            videoFormat: vf, frameSize: fs))
         if sendToPC { PCLink.push(msg) }
     }
 }

@@ -577,3 +577,43 @@ public struct YCbCrConverter: Equatable, Sendable {
         return (q(16 + Y * 219), q(128 + Cb * 224), q(128 + Cr * 224))
     }
 }
+
+/// RGBA の画素の並び（スクリーンショットを端末内で読むとき用。画像は保存しない）
+public struct RGBAImageSource: PixelSource {
+    public let width: Int, height: Int
+    private let bytes: [UInt8]
+    private let rowBytes: Int
+
+    public init?(width: Int, height: Int, rowBytes: Int, bytes: [UInt8]) {
+        guard width > 0, height > 0, rowBytes >= width * 4, bytes.count >= rowBytes * height else { return nil }
+        self.width = width; self.height = height; self.rowBytes = rowBytes; self.bytes = bytes
+    }
+
+    public func rgb(_ x: Int, _ y: Int) -> (UInt8, UInt8, UInt8) {
+        let x = min(max(x, 0), width - 1), y = min(max(y, 0), height - 1)
+        let i = y * rowBytes + x * 4
+        return (bytes[i], bytes[i + 1], bytes[i + 2])
+    }
+}
+
+/// 認識結果の診断情報（文章）。画像は含めず、盤面の位置と各マスの判定・信頼度・代表色だけ
+public enum RecognitionDiagnostics {
+    public static func text(_ r: BoardReading, source: String, imageSize: (Int, Int)?) -> String {
+        var lines: [String] = []
+        lines.append("パズルルート 診断情報（画像は含みません）")
+        lines.append("入力: \(source)" + (imageSize.map { " \($0.0)x\($0.1)" } ?? ""))
+        lines.append(String(format: "盤面: %dx%d 位置 x=%.0f y=%.0f マス=%.1f 明るさ=%.2f 平均信頼度=%.2f",
+                            r.size.cols, r.size.rows, r.rect.x, r.rect.y, r.rect.cell, r.brightness, r.averageConfidence))
+        for row in 0..<r.size.rows {
+            var cells: [String] = []
+            for col in 0..<r.size.cols {
+                let c = r.cells[row * r.size.cols + col]
+                let (h, s, v) = c.color.hsv
+                cells.append(String(format: "%@ %.2f #%02X%02X%02X h%.0f s%.2f v%.2f",
+                                    c.kind.key, c.confidence, c.color.r, c.color.g, c.color.b, h, s, v))
+            }
+            lines.append("\(row + 1)段目: " + cells.joined(separator: " | "))
+        }
+        return lines.joined(separator: "\n")
+    }
+}
