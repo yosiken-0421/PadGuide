@@ -433,10 +433,14 @@ public enum BoardReader {
             }
         }
         // 水がない盤面でも：盤面の色ドロップの典型的な明るさよりはっきり暗い青はお邪魔
-        let vivV = feats.filter { $0.hue != nil && $0.colorfulRatio >= 0.45 }.map { $0.meanV }.sorted()
-        let typicalV = vivV.count >= 6 ? vivV[vivV.count / 2] : 0.8
+        // 基準の明るさは青系以外の色ドロップで決める（お邪魔が多い盤面で、お邪魔自身が基準を下げないように）
+        let vivV = feats.filter {
+            guard let h = $0.hue else { return false }
+            return $0.colorfulRatio >= 0.45 && !(180..<250).contains(h)
+        }.map { $0.meanV }.sorted()
+        let typicalV = vivV.count >= 4 ? vivV[vivV.count / 2] : 0.8
         for i in cells.indices where cells[i].kind == .water && !learnedHit.contains(i)
-            && feats[i].meanV < min(0.6, typicalV * 0.65) {
+            && feats[i].meanV < min(0.6, typicalV * 0.7) {
             cells[i].kind = .jammer
             cells[i].confidence = 0.85
         }
@@ -538,7 +542,7 @@ public enum BoardDetector {
             pool += cands.filter { $0.metric == m }.sorted { $0.score > $1.score }.prefix(8).map { $0.rect }
         }
         var best: (q: Double, reading: BoardReading)?
-        for rect in pool {
+        for rect in pool where !looksLikeOwnDrawing(src, rect) {
             let rd = BoardReader.read(src, rect: rect, classifier: classifier)
             let q = placementScore(rd, screenHeight: H)
             if best == nil || q > best!.q { best = (q, rd) }
@@ -592,7 +596,26 @@ public enum BoardDetector {
     /// 下端が画面の 85% より上にある候補は不利にする（盤面の上の背景やアイコンを盤面と間違えないように）
     public static func placementScore(_ r: BoardReading, screenHeight H: Double) -> Double {
         let bottom = (r.rect.y + r.rect.height) / max(1, H)
-        return quality(r) - 1.0 * max(0, 0.85 - bottom)
+        return quality(r) - 1.0 * max(0, 0.9 - bottom)
+    }
+
+    /// アプリ自身の小窓（盤面の図）のマスの色。画面共有の映像には小窓も映るので、これを盤面と間違えないようにする
+    static let ownTileColors = [RGB(41, 51, 79), RGB(48, 61, 89)]
+
+    /// マスの角（ドロップの外側）の多くが小窓のマスの紺色なら、アプリ自身の図（ゲームの盤面のマスは茶色）
+    public static func looksLikeOwnDrawing(_ src: PixelSource, _ rect: BoardRect) -> Bool {
+        var hit = 0, n = 0
+        for i in 0..<rect.size.count {
+            let x0 = rect.x + Double(i % rect.size.cols) * rect.cell
+            let y0 = rect.y + Double(i / rect.size.cols) * rect.cell
+            for (fx, fy) in [(0.07, 0.07), (0.93, 0.07), (0.07, 0.93), (0.93, 0.93)] {
+                let p = src.rgb(clampX(src, x0 + rect.cell * fx), clampY(src, y0 + rect.cell * fy))
+                let c = RGB(p.0, p.1, p.2)
+                n += 1
+                if ownTileColors.contains(where: { $0.distance(to: c) < 30 }) { hit += 1 }
+            }
+        }
+        return hit * 2 >= n
     }
 
     /// 読み取り結果のはっきりさ（大きいほど、本物の盤面にぴったり合っている）

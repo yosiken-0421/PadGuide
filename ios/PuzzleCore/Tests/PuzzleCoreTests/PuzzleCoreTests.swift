@@ -323,6 +323,50 @@ final class RecognitionTests: XCTestCase {
                              BoardDetector.placementScore(r1, screenHeight: 1918) + 0.03)
     }
 
+    /// お邪魔が多く水がない盤面（実機と同じ並び）でも、お邪魔を水と間違えない
+    func testManyDarkJammersWithoutWater() {
+        let board = Board(size: S65, string: """
+            DJDJDJ
+            JDGRLL
+            RLGJJJ
+            GRJGDJ
+            JRJLJJ
+            """)
+        for jam in [RGB(45, 70, 108), RGB(40, 62, 100), RGB(50, 78, 118)] {
+            var sc = SyntheticScreen()
+            let cell = Double(sc.width) / 6
+            let y = Double(sc.height) - cell * 5 - 110
+            sc.drawShinyBoard(board, x: 0, y: y, cell: cell, jammerColor: jam, jammerPattern: true)
+            let rd = BoardReader.read(sc, rect: BoardRect(x: 0, y: y, cell: cell, size: S65), classifier: ColorClassifier())
+            XCTAssertEqual(rd.board, board, "お邪魔 \(jam)")
+        }
+    }
+
+    /// 画面共有の映像に映り込んだアプリ自身の小窓（盤面の図）を、盤面と間違えない
+    func testIgnoresOwnPiPDrawing() {
+        func drawPiP(_ sc: inout SyntheticScreen, x: Double, y: Double, cell: Double) {
+            let b = SyntheticScreen.randomBoard(S65, seed: 181)
+            for i in 0..<30 {
+                let cx = x + Double(i % 6) * cell, cy = y + Double(i / 6) * cell
+                sc.fillRect(x: Int(cx), y: Int(cy), w: Int(cell) + 1, h: Int(cell) + 1,
+                            BoardDetector.ownTileColors[(i / 6 + i % 6) % 2])
+                sc.fillCircle(cx: cx + cell / 2, cy: cy + cell / 2, r: cell * 0.4, SyntheticScreen.palette[b.cells[i]]!)
+            }
+        }
+        var sc = SyntheticScreen()
+        // 実機と同じく、検出の候補（左右の余白 6%）とぴったり同じ大きさ・位置の小窓
+        let pipCell = Double(sc.width) * 0.88 / 6, pipX = Double(sc.width) * 0.06
+        drawPiP(&sc, x: pipX, y: 1150, cell: pipCell)
+        XCTAssertTrue(BoardDetector.looksLikeOwnDrawing(sc, BoardRect(x: pipX, y: 1150, cell: pipCell, size: S65)))
+        XCTAssertNil(BoardDetector.detect(sc), "小窓だけなら盤面はない")
+        let board = SyntheticScreen.randomBoard(S65, seed: 182)
+        let cell = Double(sc.width) / 6
+        let y = Double(sc.height) - cell * 5 - 110
+        sc.drawShinyBoard(board, x: 0, y: y, cell: cell)
+        XCTAssertFalse(BoardDetector.looksLikeOwnDrawing(sc, BoardRect(x: 0, y: y, cell: cell, size: S65)))
+        XCTAssertEqual(BoardDetector.detect(sc)?.board, board, "ゲームの盤面を読む")
+    }
+
     /// メニューや演出などの白い画面を、お邪魔だらけの盤面と思い込まない
     func testWhiteScreenIsNotABoard() {
         var sc = SyntheticScreen(width: 886, height: 1918, background: RGB(240, 242, 248))

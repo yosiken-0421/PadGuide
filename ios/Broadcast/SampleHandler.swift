@@ -89,6 +89,12 @@ final class SampleHandler: RPBroadcastSampleHandler {
             guard rect != nil else { reportStatus("invalid", t); return }
         }
         guard let r = rect else { return }
+        // 小窓（アプリ自身の盤面の図）を読んでいたら、位置を探し直す
+        if BoardDetector.looksLikeOwnDrawing(src, r) {
+            rect = nil
+            session.invalidate()
+            return
+        }
         let reading = BoardReader.read(src, rect: r, classifier: classifier)
 
         guard reading.isUsable else {
