@@ -26,6 +26,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var learnedCount = 0
     /// 盤面のマスを押したときの動作（色を直す／縛りを付ける）
     @Published var tapTool: CellTool = .color
+    /// 手動修正で、似た見た目のマスもまとめて直したときのお知らせ
+    @Published private(set) var correctionNote: String?
 
     private var colors: [RGB] = []
     /// UI テスト用：見本盤面で「何手目まで進んだか」を指定する（-demoProgress N）
@@ -106,6 +108,19 @@ final class AppModel: ObservableObject {
             SharedStore.saveLearned(cls.learned)
             learnedCount = cls.learned.count
         }
+        // 同じように読み違えていた、見た目の近いマスもまとめて直す（お邪魔・毒などは盤面に複数あることが多い）
+        let old = b.cells[index]
+        var also = 0
+        if index < colors.count && old != kind {
+            let ref = colors[index]
+            for j in b.cells.indices where j != index && j < colors.count && b.cells[j] == old
+                && Self.colorDistance(colors[j], ref) < Self.sameLookDistance {
+                b.cells[j] = kind
+                if j < confidence.count { confidence[j] = 1 }
+                also += 1
+            }
+        }
+        correctionNote = also > 0 ? "見た目が近い \(also) マスも「\(kind.label)」に直しました" : nil
         b.cells[index] = kind
         board = b
         progress = nil
@@ -113,6 +128,14 @@ final class AppModel: ObservableObject {
         if index < confidence.count { confidence[index] = 1 }
         edited = true
         resolve()
+    }
+
+    /// 同じ見た目とみなす色の差（RGB の距離）
+    static let sameLookDistance = 30.0
+
+    static func colorDistance(_ a: RGB, _ b: RGB) -> Double {
+        let dr = Double(a.r) - Double(b.r), dg = Double(a.g) - Double(b.g), db = Double(a.b) - Double(b.b)
+        return (dr * dr + dg * dg + db * db).squareRoot()
     }
 
     /// 表示中の盤面で探し直す（バックグラウンド・前の計算はキャンセル）
@@ -151,6 +174,7 @@ final class AppModel: ObservableObject {
 
     func revertToAuto() {
         edited = false
+        correctionNote = nil
         if let l = latest { apply(l) } else { board = nil; result = nil }
     }
 

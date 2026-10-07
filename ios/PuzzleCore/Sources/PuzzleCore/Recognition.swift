@@ -158,6 +158,10 @@ public enum BoardReader {
         var greyBrightRatio: Double
         /// 彩度の低い（灰色〜青みがかった灰色）画素の割合。暗い縁や模様は除く
         var greyRatio: Double
+        /// 灰色っぽい画素も含めた、わずかな色味の色相（青み＝お邪魔、紫み＝毒の見分け用）
+        var tintHue: Double?
+        /// ドロップ全体（暗い縁を除く）の平均彩度
+        var bodyS: Double
         var meanV: Double
         var meanS: Double
         var hueSpread: Double     // 色相のばらつき（0=そろっている〜1）
@@ -178,6 +182,9 @@ public enum BoardReader {
         var colorful = 0, greyBright = 0, grey = 0, total = 0
         var vs = 0.0, ss = 0.0
         var cr = 0, cg = 0, cb = 0, cn = 0
+        var tx = 0.0, ty = 0.0, tw = 0.0
+        var bodyS = 0.0, bodyN = 0
+        var gr = 0, gg = 0, gb = 0, gn = 0
         let rings: [(Double, Int)] = [(0.0, 1), (0.1, 6), (0.19, 8), (0.28, 10), (0.35, 12)]
         for (radius, count) in rings {
             for k in 0..<count {
@@ -199,6 +206,13 @@ public enum BoardReader {
                     greyBright += 1
                 }
                 if sat < 0.30 && v >= 0.30 { grey += 1 }
+                if v >= 0.30 && sat >= 0.08 {
+                    tx += cos(h * Double.pi / 180) * sat
+                    ty += sin(h * Double.pi / 180) * sat
+                    tw += sat
+                }
+                if v >= 0.22 { bodyS += sat; bodyN += 1 }
+                if v >= 0.30 { gr += Int(c.r); gg += Int(c.g); gb += Int(c.b); gn += 1 }
             }
         }
         var hue: Double?
@@ -209,10 +223,28 @@ public enum BoardReader {
             hue = h
             spread = 1 - min(1, (sx * sx + sy * sy).squareRoot() / wsum)
         }
-        let color = cn > 0 ? RGB(UInt8(cr / cn), UInt8(cg / cn), UInt8(cb / cn)) : average(src, Int(cx), Int(cy), patch)
+        var tint: Double?
+        if tw > 0 {
+            var t = atan2(ty, tx) * 180 / Double.pi
+            if t < 0 { t += 360 }
+            tint = t
+        }
+        // 代表色（手動修正の学習に使う）：色ドロップは鮮やかな画素の平均、灰色っぽいドロップは模様・縁を除いた全体の平均
+        let colorfulShare = Double(colorful) / Double(total)
+        let color: RGB
+        if cn > 0 && colorfulShare >= 0.35 {
+            color = RGB(UInt8(cr / cn), UInt8(cg / cn), UInt8(cb / cn))
+        } else if gn > 0 {
+            color = RGB(UInt8(gr / gn), UInt8(gg / gn), UInt8(gb / gn))
+        } else if cn > 0 {
+            color = RGB(UInt8(cr / cn), UInt8(cg / cn), UInt8(cb / cn))
+        } else {
+            color = average(src, Int(cx), Int(cy), patch)
+        }
         return CellFeature(hue: hue, colorfulRatio: Double(colorful) / Double(total),
                            greyBrightRatio: Double(greyBright) / Double(total),
                            greyRatio: Double(grey) / Double(total),
+                           tintHue: tint, bodyS: bodyN > 0 ? bodyS / Double(bodyN) : 0,
                            meanV: colorful > 0 ? vs / Double(colorful) : color.hsv.v,
                            meanS: colorful > 0 ? ss / Double(colorful) : color.hsv.s,
                            hueSpread: spread, color: color)
@@ -267,6 +299,19 @@ public enum BoardReader {
         let vivid = feats.filter { $0.hue != nil && $0.colorfulRatio >= 0.45 }.map { $0.meanS }.sorted()
         let typicalS = vivid.count >= 6 ? vivid[vivid.count / 2] : 0.7
         let dullLimit = min(0.45, typicalS * 0.62)
+        // 紫系（闇・毒・猛毒）は、その盤面の鮮やかな闇ドロップと比べて見分ける
+        // （くすんでいれば毒、暗ければ猛毒。闇ドロップがない盤面では決まった値で判断）
+        let darkRefs = feats.filter {
+            guard let h = $0.hue else { return false }
+            return $0.colorfulRatio >= 0.45 && (255..<300).contains(h) && $0.meanS >= 0.55 && $0.meanV >= 0.5
+        }
+        var poisonS = 0.5, mortalV = 0.42
+        if darkRefs.count >= 2 {
+            let dS = darkRefs.map { $0.meanS }.sorted()[darkRefs.count / 2]
+            let dV = darkRefs.map { $0.meanV }.sorted()[darkRefs.count / 2]
+            poisonS = min(0.5, dS * 0.78)
+            mortalV = min(0.5, dV * 0.65)
+        }
 
         var cells: [CellReading] = []
         cells.reserveCapacity(size.count)
@@ -295,14 +340,18 @@ public enum BoardReader {
                 if d > 40 { conf = min(conf, 0.3) }
                 // 紫系のうち、とても暗いものは猛毒、くすんだものは毒の可能性（自信は低めにして黄色枠で知らせる。
                 // 手動で直すとその色を覚える）。通常の闇ドロップは鮮やかで明るい
-                if kind == .dark && f.meanV < 0.42 { kind = .mortalPoison; conf = min(conf, 0.55) }
-                else if kind == .dark && f.meanS < 0.42 { kind = .poison; conf = min(conf, 0.55) }
+                if kind == .dark && f.meanV < mortalV { kind = .mortalPoison; conf = min(conf, 0.55) }
+                else if kind == .dark && f.meanS < poisonS { kind = .poison; conf = min(conf, 0.55) }
                 // お邪魔ドロップ：青みがかった灰色。鮮やかな画素があっても彩度がとても低ければ色ドロップではない
                 // （水・木などの色ドロップは鮮やか。紫系のくすんだ色は毒として上で扱う）
                 else if isDullJammer(f, dullLimit: dullLimit) {
                     kind = .jammer
                     conf = min(0.9, 0.6 + f.greyRatio * 0.3 + max(0, dullLimit - f.meanS))
                 }
+            } else if (f.greyRatio >= 0.4 || f.greyBrightRatio >= 0.5), let t = f.tintHue, (250..<310).contains(t), f.bodyS >= 0.12 {
+                // 灰色っぽいが紫みがある：毒（お邪魔は青みがかった灰色）。自信は低めにして黄色枠で知らせる
+                kind = .poison
+                conf = 0.5
             } else if f.greyRatio >= 0.4 || f.greyBrightRatio >= 0.5 {
                 // 灰色が多い：お邪魔（明るさによらない。陰影や暗い模様があっても読めるように）
                 kind = .jammer

@@ -78,7 +78,7 @@ struct SyntheticScreen: PixelSource {
     /// 光沢のある球のようなドロップ（独自デザイン）：中心が明るく縁が暗い、左上に白いハイライト、細かいノイズ
     mutating func drawShinyBoard(_ board: Board, x: Double, y: Double, cell: Double,
                                  hueShift: Double = 0, valueScale: Double = 1, seed: UInt64 = 1, enhanced: Bool = false,
-                                 jammerColor: RGB? = nil, jammerPattern: Bool = false) {
+                                 jammerColor: RGB? = nil, jammerPattern: Bool = false, colors: [OrbKind: RGB] = [:]) {
         var rng = seed
         func noise() -> Double {
             rng = rng &* 6364136223846793005 &+ 1442695040888963407
@@ -92,7 +92,7 @@ struct SyntheticScreen: PixelSource {
                 fillRect(x: x0, y: y0, w: Int(cell) + 1, h: Int(cell) + 1, checker)
                 let kind = board[r, c]
                 guard let pal = Self.palette[kind] else { continue }
-                let base0 = kind == .jammer ? (jammerColor ?? pal) : pal
+                let base0 = colors[kind] ?? (kind == .jammer ? (jammerColor ?? pal) : pal)
                 let base = Self.adjust(base0, hueShift: hueShift, valueScale: valueScale)
                 let (bh, bs, bv) = base.hsv
                 let cx = x + (Double(c) + 0.5) * cell, cy = y + (Double(r) + 0.5) * cell

@@ -168,6 +168,61 @@ final class RecognitionTests: XCTestCase {
         }
     }
 
+    private func readShiny(_ board: Board, scale: Double, colors: [OrbKind: RGB]) -> Board {
+        var sc = SyntheticScreen()
+        let cell = Double(sc.width) / Double(board.size.cols)
+        let y = Double(sc.height) - cell * Double(board.size.rows) - 110
+        sc.drawShinyBoard(board, x: 0, y: y, cell: cell, valueScale: scale,
+                          jammerColor: RGB(118, 128, 148), jammerPattern: true, colors: colors)
+        return BoardReader.read(sc, rect: BoardRect(x: 0, y: y, cell: cell, size: board.size), classifier: ColorClassifier()).board
+    }
+
+    /// 毒・猛毒の色味が少し違っても、お邪魔・闇と間違えない（盤面の闇ドロップと比べて見分ける）
+    func testPurpleFamilyVariants() {
+        let board = Board(size: S65, string: """
+            RBGLDH
+            JPMRBD
+            LDHRBG
+            DPHJPM
+            RBGLDH
+            """)
+        let variants: [(String, [OrbKind: RGB])] = [
+            ("標準", [:]),
+            ("明るい毒", [.poison: RGB(175, 140, 200)]),
+            ("鮮やかな毒", [.poison: RGB(150, 100, 190)]),
+            ("くすんだ闇", [.dark: RGB(140, 80, 190)]),
+            ("明るい猛毒", [.mortalPoison: RGB(95, 50, 120)]),
+        ]
+        for (name, colors) in variants {
+            for scale in [1.0, 0.75, 0.6] {
+                XCTAssertEqual(readShiny(board, scale: scale, colors: colors), board, "\(name)・明るさ \(scale)")
+            }
+        }
+    }
+
+    /// 闇ドロップがない盤面の毒、闇しかない盤面（毒と間違えない）
+    func testPoisonWithoutDarkAndDarkOnly() {
+        let noDark = Board(size: S65, string: """
+            RBGLPH
+            PJMRBG
+            LPHRBG
+            LBHJPM
+            RBGLPH
+            """)
+        let darkOnly = Board(size: S65, string: """
+            RBGLDH
+            DBGRDG
+            LDHRBG
+            LDHRDG
+            RBGLDH
+            """)
+        for scale in [1.0, 0.7] {
+            XCTAssertEqual(readShiny(noDark, scale: scale, colors: [:]), noDark)
+            XCTAssertEqual(readShiny(noDark, scale: scale, colors: [.poison: RGB(150, 100, 190)]), noDark)
+            XCTAssertEqual(readShiny(darkOnly, scale: scale, colors: [.dark: RGB(140, 80, 190)]), darkOnly)
+        }
+    }
+
     /// 読めた盤面の信頼度は高く、黄色枠（自信がないマス）が出ない
     func testConfidenceIsHighForClearOrbs() {
         let board = SyntheticScreen.randomBoard(S65, seed: 140)

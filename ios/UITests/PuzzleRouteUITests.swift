@@ -297,7 +297,7 @@ final class PuzzleRouteUITests: XCTestCase {
     /// 盤面のマスを、画面下の小窓バーに隠れない位置まで動かしてから押す
     private func tapCell(_ id: String, in app: XCUIApplication) {
         let cell = app.buttons[id]
-        XCTAssertTrue(revealAbove(cell, in: app) || reveal(cell, in: app), "\(id) が表示される")
+        XCTAssertTrue(show(cell, in: app), "\(id) が表示される")
         for _ in 0..<4 where cell.frame.maxY > app.frame.height * 0.6 {
             app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.7))
                 .press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.45)))
@@ -311,8 +311,15 @@ final class PuzzleRouteUITests: XCTestCase {
 
     private func tapButton(_ id: String, in app: XCUIApplication) {
         let b = app.buttons[id]
-        XCTAssertTrue(reveal(b, in: app) || revealAbove(b, in: app), "\(id) が表示される")
+        XCTAssertTrue(show(b, in: app), "\(id) が表示される")
         b.tap()
+    }
+
+    /// 上下どちらにあっても表示する
+    @discardableResult
+    private func show(_ e: XCUIElement, in app: XCUIApplication) -> Bool {
+        if e.exists && e.isHittable { return true }
+        return revealAbove(e, in: app, maxSwipes: 6) || reveal(e, in: app)
     }
 
     private func waitLabel(_ e: XCUIElement, contains text: String, timeout: Double = 15) -> Bool {
@@ -332,19 +339,19 @@ final class PuzzleRouteUITests: XCTestCase {
         tapButton("tool-start", in: app)
         tapCell("cell-14", in: app)
         let start = app.staticTexts["routeStart"]
-        XCTAssertTrue(reveal(start, in: app))
+        XCTAssertTrue(show(start, in: app))
         XCTAssertTrue(waitLabel(start, contains: "上から3段目・左から3列目"), "開始位置が固定される: \(start.label)")
         let summary = app.staticTexts["constraintSummary"]
-        XCTAssertTrue(reveal(summary, in: app))
+        XCTAssertTrue(show(summary, in: app))
         XCTAssertTrue(waitLabel(summary, contains: "開始位置固定"), summary.label)
 
         // 操作不可：上から3段目・左から4列目（cell-15）
         tapButton("tool-blocked", in: app)
         tapCell("cell-15", in: app)
-        XCTAssertTrue(reveal(summary, in: app))
+        XCTAssertTrue(show(summary, in: app))
         XCTAssertTrue(waitLabel(summary, contains: "操作不可 1マス"), summary.label)
         let rc = app.staticTexts["routeConstraints"]
-        XCTAssertTrue(reveal(rc, in: app))
+        XCTAssertTrue(show(rc, in: app))
         XCTAssertTrue(waitLabel(rc, contains: "操作不可"), "ルートの計算に縛りが使われる: \(rc.label)")
 
         // 色を直すモードに戻すと、マスを押したときに色の選択肢が出る
@@ -355,7 +362,7 @@ final class PuzzleRouteUITests: XCTestCase {
 
         // すべて解除
         tapButton("clearConstraints", in: app)
-        XCTAssertTrue(reveal(summary, in: app))
+        XCTAssertTrue(show(summary, in: app))
         XCTAssertTrue(waitLabel(summary, contains: "なし"), summary.label)
     }
 }
