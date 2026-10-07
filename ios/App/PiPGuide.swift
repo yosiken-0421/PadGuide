@@ -53,12 +53,12 @@ final class PiPGuide: NSObject, ObservableObject {
     }
 
     /// 画面に表示されたら一度だけ呼ぶ
-    func prepare(autoStart: Bool, provider: @escaping @MainActor () -> PiPContent) {
+    func prepare(autoStart _: Bool, provider: @escaping @MainActor () -> PiPContent) {
         self.provider = provider
         guard controller == nil else { return }
         // 小窓には「再生」用の音声設定が必要（音は鳴らさない。ゲームの音を止めないよう他の音と混ぜる設定）
         try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback, options: [.mixWithOthers])
-        // ゲームへ切り替えたときの自動開始にも必要なので、最初から有効にしておく（他の音は止めない）
+        // 小窓は必ずユーザーが「小窓で表示」を押したときだけ開始する。
         try? AVAudioSession.sharedInstance().setActive(true)
         refresh(force: true)
         timer = Timer.scheduledTimer(withTimeInterval: 0.15, repeats: true) { [weak self] _ in
@@ -74,8 +74,8 @@ final class PiPGuide: NSObject, ObservableObject {
         let c = AVPictureInPictureController(contentSource: source)
         c.delegate = self
         c.requiresLinearPlayback = true
-        // ゲームへ切り替えたとき自動で小窓にする
-        c.canStartPictureInPictureAutomaticallyFromInline = autoStart
+        // App Store の要件に合わせ、バックグラウンド遷移だけで自動開始しない。
+        c.canStartPictureInPictureAutomaticallyFromInline = false
         possibleObservation = c.observe(\.isPictureInPicturePossible, options: [.initial, .new]) { [weak self] ctl, _ in
             let p = ctl.isPictureInPicturePossible
             Task { @MainActor in self?.state.setPossible(p) }

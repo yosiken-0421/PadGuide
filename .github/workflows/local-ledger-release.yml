@@ -1,0 +1,218 @@
+name: LocalLedger Release / TestFlight
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "apps/LocalLedger/**"
+      - ".github/workflows/local-ledger-release.yml"
+  workflow_dispatch:
+    inputs:
+      release_mode:
+        description: "build_only = signed IPA only / testflight = upload to TestFlight"
+        type: choice
+        options:
+          - build_only
+          - testflight
+        default: build_only
+      version:
+        description: "Display version"
+        required: false
+        default: "1.0"
+        type: string
+      build_number:
+        description: "Build number (blank = auto)"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: local-ledger-release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  release:
+    runs-on: macos-26
+    timeout-minutes: 60
+    env:
+      RELEASE_MODE: ${{ inputs.release_mode || 'build_only' }}
+      DD: ${{ github.workspace }}/../local-ledger-release-dd
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: |
+          X=$(ls -d /Applications/Xcode_2[6-9]*.app 2>/dev/null | sort -V | tail -1)
+          test -n "$X"
+          sudo xcode-select -s "$X/Contents/Developer"
+          xcodebuild -version
+
+      - name: Decide version
+        env:
+          IN_VERSION: ${{ inputs.version }}
+          IN_BUILD: ${{ inputs.build_number }}
+        run: |
+          VERSION="${IN_VERSION:-1.0}"
+          if ! [[ "$VERSION" =~ ^[0-9]+(\.[0-9]+){0,2}$ ]]; then
+            echo "::error::Invalid version: $VERSION"
+            exit 1
+          fi
+          BUILD=$((GITHUB_RUN_NUMBER + 2000))
+          if [ -n "$IN_BUILD" ]; then
+            if ! [[ "$IN_BUILD" =~ ^[0-9]{1,9}$ ]]; then
+              echo "::error::Invalid build number"
+              exit 1
+            fi
+            BUILD="$IN_BUILD"
+          fi
+          echo "APP_VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "APP_BUILD=$BUILD" >> "$GITHUB_ENV"
+
+      - name: Generate project
+        working-directory: apps/LocalLedger
+        run: |
+          brew install xcodegen
+          xcodegen generate
+
+      - name: Core tests
+        run: swift test --package-path apps/LocalLedger/Core
+
+      - name: Simulator build
+        run: |
+          xcodebuild build \
+            -project apps/LocalLedger/LocalLedger.xcodeproj \
+            -scheme LocalLedger \
+            -configuration Debug \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath "$DD-sim" \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Prepare App Store Connect API key
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          missing=""
+          for v in ASC_KEY_ID ASC_ISSUER_ID ASC_KEY_P8 APPLE_TEAM_ID; do
+            [ -z "${!v}" ] && missing="$missing $v"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Missing repository secrets:$missing"
+            exit 1
+          fi
+
+          mkdir -p "$RUNNER_TEMP/keys"
+          chmod 700 "$RUNNER_TEMP/keys"
+          python3 - <<'PY'
+          import os, re, base64, sys
+          raw=os.environ["ASC_KEY_P8"]
+          body=re.sub(r"-----(BEGIN|END)[^-]*-----", "", raw)
+          body=re.sub(r"[^A-Za-z0-9+/=]", "", body)
+          der=base64.b64decode(body + "=" * (-len(body) % 4))
+          if len(der) < 100:
+              print("::error::ASC_KEY_P8 is invalid")
+              sys.exit(1)
+          b64=base64.b64encode(der).decode()
+          pem="-----BEGIN PRIVATE KEY-----\n" + "\n".join(b64[i:i+64] for i in range(0,len(b64),64)) + "\n-----END PRIVATE KEY-----\n"
+          p=os.path.join(os.environ["RUNNER_TEMP"],"keys","AuthKey.p8")
+          open(p,"w").write(pem)
+          os.chmod(p,0o600)
+          PY
+          echo "KEY_ID=$(printf '%s' "$ASC_KEY_ID" | tr -d '[:space:]')" >> "$GITHUB_ENV"
+          echo "ISSUER_ID=$(printf '%s' "$ASC_ISSUER_ID" | tr -d '[:space:]')" >> "$GITHUB_ENV"
+          echo "TEAM_ID=$(printf '%s' "$APPLE_TEAM_ID" | tr -d '[:space:]')" >> "$GITHUB_ENV"
+
+      - name: Release archive
+        run: |
+          xcodebuild archive \
+            -project apps/LocalLedger/LocalLedger.xcodeproj \
+            -scheme LocalLedger \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/LocalLedger.xcarchive" \
+            -derivedDataPath "$DD-device" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$RUNNER_TEMP/keys/AuthKey.p8" \
+            -authenticationKeyID "$KEY_ID" \
+            -authenticationKeyIssuerID "$ISSUER_ID" \
+            DEVELOPMENT_TEAM="$TEAM_ID" \
+            CODE_SIGN_STYLE=Automatic \
+            MARKETING_VERSION="$APP_VERSION" \
+            CURRENT_PROJECT_VERSION="$APP_BUILD"
+
+          APP="$RUNNER_TEMP/LocalLedger.xcarchive/Products/Applications/LocalLedger.app"
+          V=$(/usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" "$APP/Info.plist")
+          B=$(/usr/libexec/PlistBuddy -c "Print CFBundleVersion" "$APP/Info.plist")
+          BID=$(/usr/libexec/PlistBuddy -c "Print CFBundleIdentifier" "$APP/Info.plist")
+          echo "Archive: $BID $V ($B)"
+          test "$V" = "$APP_VERSION"
+          test "$B" = "$APP_BUILD"
+          test "$BID" = "com.yosiken0421.localkakeibo"
+
+      - name: Export signed IPA
+        run: |
+          cat > "$RUNNER_TEMP/export.plist" <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>destination</key><string>export</string>
+            <key>teamID</key><string>$TEAM_ID</string>
+            <key>signingStyle</key><string>automatic</string>
+            <key>manageAppVersionAndBuildNumber</key><false/>
+          </dict></plist>
+          EOF
+
+          xcodebuild -exportArchive \
+            -archivePath "$RUNNER_TEMP/LocalLedger.xcarchive" \
+            -exportOptionsPlist "$RUNNER_TEMP/export.plist" \
+            -exportPath "$RUNNER_TEMP/ipa" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$RUNNER_TEMP/keys/AuthKey.p8" \
+            -authenticationKeyID "$KEY_ID" \
+            -authenticationKeyIssuerID "$ISSUER_ID"
+
+          IPA=$(ls "$RUNNER_TEMP"/ipa/*.ipa | head -1)
+          mkdir -p "$RUNNER_TEMP/out"
+          cp "$IPA" "$RUNNER_TEMP/out/LocalLedger-$APP_VERSION-$APP_BUILD.ipa"
+
+      - name: Save IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: LocalLedger-iOS-${{ env.APP_VERSION }}-${{ env.APP_BUILD }}
+          path: ${{ runner.temp }}/out/*.ipa
+          retention-days: 14
+
+      - name: Upload to TestFlight
+        if: env.RELEASE_MODE == 'testflight'
+        run: |
+          cat > "$RUNNER_TEMP/upload.plist" <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>destination</key><string>upload</string>
+            <key>teamID</key><string>$TEAM_ID</string>
+            <key>signingStyle</key><string>automatic</string>
+            <key>manageAppVersionAndBuildNumber</key><false/>
+          </dict></plist>
+          EOF
+
+          xcodebuild -exportArchive \
+            -archivePath "$RUNNER_TEMP/LocalLedger.xcarchive" \
+            -exportOptionsPlist "$RUNNER_TEMP/upload.plist" \
+            -exportPath "$RUNNER_TEMP/upload" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$RUNNER_TEMP/keys/AuthKey.p8" \
+            -authenticationKeyID "$KEY_ID" \
+            -authenticationKeyIssuerID "$ISSUER_ID"
+
+      - name: Cleanup
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/keys" "$RUNNER_TEMP/export.plist" "$RUNNER_TEMP/upload.plist"

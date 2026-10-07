@@ -36,6 +36,7 @@ struct ContentView: View {
                 settingsSection
                 pipSection
                 learnedSection
+                privacySection
                 Section {
                     Text(Self.disclaimer)
                         .font(.footnote)
@@ -46,7 +47,7 @@ struct ContentView: View {
             // 小窓の表示レイヤーは常に画面に置いておく（画面に入っていないと小窓を開始できない）
             .safeAreaInset(edge: .bottom, spacing: 0) { PiPBar(pip: pip) }
             .onAppear {
-                pip.prepare(autoStart: !model.isUITest) { [weak m = model] in
+                pip.prepare(autoStart: false) { [weak m = model] in
                     PiPContent(board: m?.board, result: m?.result, progress: m?.progress, offRoute: m?.offRoute ?? false)
                 }
             }
@@ -124,6 +125,12 @@ struct ContentView: View {
     @ViewBuilder private var boardSection: some View {
         Section {
             if let b = model.board {
+                if model.showingSample {
+                    Label("見本盤面（実際のゲーム画面は使っていません）", systemImage: "sparkles")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .accessibilityIdentifier("sampleBoardNotice")
+                }
                 BoardView(board: b, confidence: model.confidence, result: model.result, progress: model.progress,
                           constraints: model.activeConstraints) { i in
                     if model.tapCell(i) {
@@ -168,7 +175,11 @@ struct ContentView: View {
                     Button("再探索") { model.resolve() }
                         .buttonStyle(.borderless)
                     Spacer()
-                    if model.edited {
+                    if model.showingSample {
+                        Button("見本盤面を閉じる") { model.clearSampleBoard() }
+                            .buttonStyle(.borderless)
+                            .accessibilityIdentifier("closeSampleBoardButton")
+                    } else if model.edited {
                         Button("自動の結果に戻す") { model.revertToAuto() }
                             .buttonStyle(.borderless)
                     }
@@ -177,6 +188,12 @@ struct ContentView: View {
                 Text("まだ盤面がありません。画面共有を開始して、パズル画面を表示してください。")
                     .foregroundStyle(.secondary)
                     .accessibilityIdentifier("emptyBoard")
+                Button {
+                    model.loadSampleBoard()
+                } label: {
+                    Label("見本盤面で試す", systemImage: "play.rectangle")
+                }
+                .accessibilityIdentifier("sampleBoardButton")
             }
             if model.sharing {
                 Button("今の画面で計算し直す") { model.recalcFromScreen() }
@@ -184,7 +201,7 @@ struct ContentView: View {
                     .accessibilityIdentifier("recalcButton")
             }
         } header: {
-            Text("認識した盤面")
+            Text("盤面とルート")
         } footer: {
             Text("ルートを表示した後は、ドロップを動かしている間もルートを変えずに表示し続けます。コンボで消えて次の盤面になると、自動で計算し直します。黄色い枠は認識に自信がないマスです。タップすると正しい色に直せます（見た目が近いマスもまとめて直します）。直した色の傾向はこの iPhone の中だけに保存され、次の盤面からは同じ見た目のドロップを正しく読みます。")
         }
@@ -274,7 +291,18 @@ struct ContentView: View {
         }
     }
 
-    static let pipNotice = "画面下の「小窓で表示」を押すか、画面共有中にゲームへ切り替えると、盤面とルートの図が小窓（ピクチャ・イン・ピクチャ）で表示されます。iOS ではゲーム画面に直接ルートを重ねることはできないため、小窓をパズルの盤面に重ならない位置（画面の上のほう）へ動かして使ってください。PC ビューアーでも同じルートを見られます。"
+    static let pipNotice = "画面下の「小窓で表示」を押すと、盤面とルートの図が小窓（ピクチャ・イン・ピクチャ）で表示されます。小窓を開始してからゲームへ切り替えてください。iOS ではゲーム画面に直接ルートを重ねることはできないため、小窓をパズルの盤面に重ならない位置（画面の上のほう）へ動かして使ってください。PC ビューアーでも同じルートを見られます。"
+
+    private var privacySection: some View {
+        Section {
+            Link(destination: URL(string: "https://github.com/yosiken-0421/PadGuide/blob/main/PRIVACY.md")!) {
+                Label("プライバシーポリシー", systemImage: "hand.raised")
+            }
+            .accessibilityIdentifier("privacyPolicyLink")
+        } footer: {
+            Text("画面共有・カメラ・ローカルネットワークの利用目的、保存する情報、削除方法を確認できます。")
+        }
+    }
 
     private var learnedSection: some View {
         Section {
