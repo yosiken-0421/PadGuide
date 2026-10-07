@@ -133,6 +133,7 @@ struct ContentView: View {
                         .foregroundStyle(.secondary)
                         .accessibilityIdentifier("sampleBoardNotice")
                 }
+                toolPicker
                 BoardView(board: b, confidence: model.confidence, result: model.result, progress: model.progress,
                           constraints: model.activeConstraints, covered: model.coveredCells) { i in
                     if model.tapCell(i) {
@@ -141,7 +142,6 @@ struct ContentView: View {
                     }
                 }
                     .listRowInsets(EdgeInsets(top: 8, leading: 8, bottom: 8, trailing: 8))
-                toolPicker
                 if let r = model.result {
                     if r.status == "ok" {
                         VStack(alignment: .leading, spacing: 4) {

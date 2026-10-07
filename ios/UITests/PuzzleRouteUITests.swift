@@ -295,35 +295,53 @@ final class PuzzleRouteUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["routeSummary"].label.contains("コンボ"))
     }
 
-    /// 盤面のマスを、画面下の小窓バーに隠れない位置まで動かしてから押す
+    /// 要素が画面の見える範囲（上の見出しと下の小窓バーの間）に入っているか。isHittable は使わない（画面外だと例外になることがある）
+    private func onScreen(_ e: XCUIElement, _ app: XCUIApplication) -> Bool {
+        guard e.exists else { return false }
+        let f = e.frame
+        guard !f.isEmpty, f.width > 0, f.height > 0 else { return false }
+        let bar = app.buttons["pipButton"]
+        let bottom = bar.exists && !bar.frame.isEmpty ? bar.frame.minY - 40 : app.frame.maxY - 120
+        return f.midY > app.frame.minY + 120 && f.midY < bottom
+    }
+
+    /// 少しずつスクロールして、要素を見える範囲に入れる（上→下の順に探す）
+    @discardableResult
+    private func bringOnScreen(_ e: XCUIElement, in app: XCUIApplication) -> Bool {
+        func drag(_ from: Double, _ to: Double) {
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: from))
+                .press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: to)))
+        }
+        if onScreen(e, app) { return true }
+        // 要素の位置が分かれば、その方向へ動かす
+        for _ in 0..<14 {
+            if onScreen(e, app) { return true }
+            if e.exists && !e.frame.isEmpty {
+                if e.frame.midY > app.frame.midY { drag(0.7, 0.45) } else { drag(0.35, 0.6) }
+            } else {
+                drag(0.35, 0.6)   // 見つからなければ上へ
+            }
+        }
+        for _ in 0..<14 where !onScreen(e, app) { drag(0.7, 0.45) }   // それでもなければ下へ
+        return onScreen(e, app)
+    }
+
     private func tapCell(_ id: String, in app: XCUIApplication) {
         let cell = app.buttons[id]
-        XCTAssertTrue(show(cell, in: app), "\(id) が表示される")
-        for _ in 0..<4 where cell.frame.maxY > app.frame.height * 0.6 {
-            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.7))
-                .press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.45)))
-        }
-        for _ in 0..<4 where cell.frame.minY < app.frame.height * 0.12 {
-            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3))
-                .press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)))
-        }
-        cell.tap()
+        XCTAssertTrue(bringOnScreen(cell, in: app), "\(id) が表示される")
+        cell.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
     }
 
     private func tapButton(_ id: String, in app: XCUIApplication) {
         let b = app.buttons[id]
-        XCTAssertTrue(show(b, in: app), "\(id) が表示される")
-        b.tap()
+        XCTAssertTrue(bringOnScreen(b, in: app), "\(id) が表示される")
+        b.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
     }
 
     /// 上下どちらにあっても表示する
     @discardableResult
     private func show(_ e: XCUIElement, in app: XCUIApplication) -> Bool {
-        if e.exists && e.isHittable { return true }
-        // 上下どちらにあるか分からないので、上→下→上の順に探す（小さい画面・遅い CI でも見つかるように）
-        if revealAbove(e, in: app, maxSwipes: 10) { return true }
-        if reveal(e, in: app, maxSwipes: 10) && e.isHittable { return true }
-        return revealAbove(e, in: app, maxSwipes: 12)
+        bringOnScreen(e, in: app)
     }
 
     private func waitLabel(_ e: XCUIElement, contains text: String, timeout: Double = 15) -> Bool {
