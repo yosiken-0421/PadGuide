@@ -34,6 +34,7 @@ final class SampleHandler: RPBroadcastSampleHandler {
     private var roulette = RouletteDetector()
     /// 小窓・アプリへ知らせる、自動で見つけたルーレットのマス（別スレッドから読むので lock で守る）
     private var autoHiddenSnapshot: [Int] = []
+    private var rouletteInfo = ""
     private var rouletteRect: BoardRect?
     private var frameSize: [Int] = []
 
@@ -145,7 +146,8 @@ final class SampleHandler: RPBroadcastSampleHandler {
         // （色が変わり続けても、盤面が変わったとみなさない）
         let ignored = Array(Set(settings.constraints?.effective(for: r.size)?.hidden ?? []).union(roulette.cells)).sorted()
         session.setIgnored(ignored)
-        lock.lock(); autoHiddenSnapshot = roulette.cells.sorted(); lock.unlock()
+        let rInfo = settings.autoRouletteOn ? roulette.diagnostics(cols: r.size.cols) : "ルーレット判定：オフ"
+        lock.lock(); autoHiddenSnapshot = roulette.cells.sorted(); rouletteInfo = rInfo; lock.unlock()
 
         // ルート表示中：今の盤面からどこまで操作が進んだかを推定して知らせる
         lock.lock()
@@ -225,9 +227,10 @@ final class SampleHandler: RPBroadcastSampleHandler {
 
     private func publish(_ msg: ResultMessage, reading: BoardReading?, progress: Int? = nil, offRoute: Bool = false,
                          sendToPC: Bool = true) {
-        lock.lock(); seq += 1; let s = seq; let vf = videoFormat; let fs = frameSize; let ah = autoHiddenSnapshot; lock.unlock()
+        lock.lock(); seq += 1; let s = seq; let vf = videoFormat; let fs = frameSize; let ah = autoHiddenSnapshot; let ri = rouletteInfo; lock.unlock()
         SharedStore.writeLatest(LatestState(seq: s, reading: reading, result: msg, progress: progress, offRoute: offRoute,
-                                            videoFormat: vf, frameSize: fs, autoHidden: ah.isEmpty ? nil : ah))
+                                            videoFormat: vf, frameSize: fs, autoHidden: ah.isEmpty ? nil : ah,
+                                            rouletteInfo: ri.isEmpty ? nil : ri))
         if sendToPC { PCLink.push(msg) }
     }
 }

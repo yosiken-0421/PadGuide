@@ -359,6 +359,7 @@ final class AppModel: ObservableObject {
         guard let l = latest, let r = l.reading else { return nil }
         let size = l.frameSize.flatMap { $0.count == 2 ? ($0[0], $0[1]) : nil }
         return RecognitionDiagnostics.text(r, source: "画面共有 " + (l.videoFormat ?? ""), imageSize: size)
+            + (l.rouletteInfo.map { "\n" + $0 } ?? "")
     }
 
     func copyDiagnostics() {

@@ -1088,13 +1088,30 @@ final class RouletteDetectorTests: XCTestCase {
         for _ in 0..<3 { XCTAssertFalse(d.feed(other.cells)) }
         XCTAssertEqual(d.cells, [8])
         // ルーレットが止まった盤面がしばらく続くと外す
-        for _ in 0..<20 { d.feed(other.cells) }
+        for _ in 0..<30 { d.feed(other.cells) }
         XCTAssertTrue(d.cells.isEmpty)
         // 大きさが変わったらやり直し
-        for f in frames(base, roulette: [8], count: 20) { d.feed(f) }
+        for f in frames(base, roulette: [8], count: 32) { d.feed(f) }
         XCTAssertEqual(d.cells, [8])
         d.feed(SyntheticScreen.randomBoard(S76, seed: 606).cells)
         XCTAssertTrue(d.cells.isEmpty)
+    }
+
+    /// 実機のように読み違いで数マスがちらついていても、ルーレットを見つける。ルーレットの間隔が 0.5 秒・1 秒・1.5 秒でも
+    func testFindsRouletteWithNoise() {
+        let base = SyntheticScreen.randomBoard(S65, seed: 608)
+        for every in [2, 4, 6] {
+            var d = RouletteDetector()
+            for (f, cells) in frames(base, roulette: [10, 22], count: 40, every: every).enumerated() {
+                var c = cells
+                c[1] = f % 2 == 0 ? .dark : .poison          // 読み違いのちらつき
+                c[13] = f % 3 == 0 ? .unknown : base.cells[13]
+                c[29] = f % 4 == 0 ? .light : base.cells[29] == .light ? .heart : base.cells[29]
+                d.feed(c)
+            }
+            XCTAssertEqual(d.cells, [10, 22], "間隔 \(every) フレーム")
+            XCTAssertTrue(d.diagnostics(cols: 6).contains("2段5列"), d.diagnostics(cols: 6))
+        }
     }
 
     /// 自動で見つけたマスを見ないマスにすると、ルーレットが回っても計算し直さない（以前のテストと同じ流れ）

@@ -62,6 +62,8 @@ struct LatestState: Codable {
     var frameSize: [Int]? = nil
     /// 画面共有側で自動で見つけたルーレットのマス
     var autoHidden: [Int]? = nil
+    /// 診断用：ルーレットの自動判定の判断材料（文章）
+    var rouletteInfo: String? = nil
 }
 
 enum SharedStore {
