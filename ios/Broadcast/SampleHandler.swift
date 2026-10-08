@@ -30,12 +30,18 @@ final class SampleHandler: RPBroadcastSampleHandler {
     private var seq = 0
     private var cancelFlag: CancellationFlag?
     private var videoFormat = ""
+    /// ルーレットの自動判定（画面の変化だけで判断する。見つけたマスは「見ないマス」に足すだけで、手動の設定は変えない）
+    private var roulette = RouletteDetector()
+    /// 小窓・アプリへ知らせる、自動で見つけたルーレットのマス（別スレッドから読むので lock で守る）
+    private var autoHiddenSnapshot: [Int] = []
+    private var rouletteRect: BoardRect?
     private var frameSize: [Int] = []
 
     private func now() -> Double { Date().timeIntervalSince1970 }
 
     override func broadcastStarted(withSetupInfo setupInfo: [String: NSObject]?) {
         session.begin()
+        roulette.reset()
         reloadSettings()
         SharedStore.heartbeat()
         SharedStore.clearLatest()
@@ -45,6 +51,7 @@ final class SampleHandler: RPBroadcastSampleHandler {
     override func broadcastFinished() {
         cancelFlag?.cancel()
         session.end()                       // 保持しているデータを破棄
+        roulette.reset()
         lock.lock(); tracker = nil; shownResult = nil; shownReading = nil; lock.unlock()
         SharedStore.clearLatest()
         SharedStore.clearHeartbeat()
@@ -123,9 +130,22 @@ final class SampleHandler: RPBroadcastSampleHandler {
             }
         }
 
-        // 雲・ルーレットに指定したマスは見ない（色が変わり続けても、盤面が変わったとみなさない）
-        let ignored = settings.constraints?.effective(for: r.size)?.hidden ?? []
+        // ルーレットの自動判定：見つけたマスが変わったら、そのマスを見ないで計算し直す
+        // （盤面の位置が変わったときだけやり直す。演出中などに一時的に読めなくなっても、見つけたマスは保つ）
+        if let old = rouletteRect, Self.differs(old, r) { roulette.reset() }
+        rouletteRect = r
+        if settings.autoRouletteOn {
+            if roulette.feed(reading.cells.map { $0.kind }) { session.forceNextSolve() }
+        } else if !roulette.cells.isEmpty {
+            roulette.reset()
+            session.forceNextSolve()
+        }
+
+        // 雲・ルーレットに指定したマス（手動）と、自動で見つけたルーレットのマスは見ない
+        // （色が変わり続けても、盤面が変わったとみなさない）
+        let ignored = Array(Set(settings.constraints?.effective(for: r.size)?.hidden ?? []).union(roulette.cells)).sorted()
         session.setIgnored(ignored)
+        lock.lock(); autoHiddenSnapshot = roulette.cells.sorted(); lock.unlock()
 
         // ルート表示中：今の盤面からどこまで操作が進んだかを推定して知らせる
         lock.lock()
@@ -152,6 +172,7 @@ final class SampleHandler: RPBroadcastSampleHandler {
         let flag = CancellationFlag()
         cancelFlag = flag
         let options = settings.solverOptions
+        let autoHidden = roulette.cells
         let goals = settings.goals
         // 直近のフレームの多数決で確定した盤面を使う（1フレームだけの読み違いを入れない）
         let stable = session.stableCells
@@ -166,7 +187,7 @@ final class SampleHandler: RPBroadcastSampleHandler {
                                          constraints: options.constraints)
             self.session.store(result: msg)
             var newTracker = msg.status == "ok" ? RouteTracker(board: board, path: msg.path) : nil
-            newTracker?.ignored = Set(options.constraints?.effective(for: board.size)?.hidden ?? [])
+            newTracker?.ignored = Set(options.constraints?.effective(for: board.size)?.hidden ?? []).union(autoHidden)
             // このルートで起こりうる盤面を登録（これと違う盤面になったら自動で読み直す）
             self.session.setRoute(boards: newTracker?.boards ?? [board.cells])
             self.lock.lock()
@@ -204,9 +225,9 @@ final class SampleHandler: RPBroadcastSampleHandler {
 
     private func publish(_ msg: ResultMessage, reading: BoardReading?, progress: Int? = nil, offRoute: Bool = false,
                          sendToPC: Bool = true) {
-        lock.lock(); seq += 1; let s = seq; let vf = videoFormat; let fs = frameSize; lock.unlock()
+        lock.lock(); seq += 1; let s = seq; let vf = videoFormat; let fs = frameSize; let ah = autoHiddenSnapshot; lock.unlock()
         SharedStore.writeLatest(LatestState(seq: s, reading: reading, result: msg, progress: progress, offRoute: offRoute,
-                                            videoFormat: vf, frameSize: fs))
+                                            videoFormat: vf, frameSize: fs, autoHidden: ah.isEmpty ? nil : ah))
         if sendToPC { PCLink.push(msg) }
     }
 }

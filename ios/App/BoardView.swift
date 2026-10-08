@@ -39,6 +39,8 @@ struct BoardView: View {
     var constraints: BoardConstraints? = nil
     /// 黒く覆われて色が見えないマス（暗闇など）
     var covered: Set<Int> = []
+    /// 自動で見つけたルーレットのマス
+    var autoRoulette: Set<Int> = []
     var onTapCell: ((Int) -> Void)?
 
     var body: some View {
@@ -83,12 +85,15 @@ struct BoardView: View {
             ctx.fill(Path(rect), with: .color(bg))
             let k = board.cells[i]
             let isCovered = k == .unknown && covered.contains(i)
+            let isRoulette = autoRoulette.contains(i)
             ctx.fill(Path(ellipseIn: rect.insetBy(dx: cell * 0.1, dy: cell * 0.1)),
-                     with: .color(isCovered ? Color(red: 0.08, green: 0.08, blue: 0.1) : OrbStyle.color(k)))
-            ctx.draw(Text(isCovered ? "暗" : OrbStyle.mark(k)).font(.system(size: cell * 0.3, weight: .heavy)).foregroundColor(.white),
+                     with: .color(isCovered ? Color(red: 0.08, green: 0.08, blue: 0.1)
+                                  : isRoulette ? Color(red: 0.45, green: 0.5, blue: 0.62) : OrbStyle.color(k)))
+            ctx.draw(Text(isCovered ? "暗" : isRoulette ? "ル" : OrbStyle.mark(k))
+                        .font(.system(size: cell * 0.3, weight: .heavy)).foregroundColor(.white),
                      at: CGPoint(x: rect.midX, y: rect.midY))
             let conf = i < confidence.count ? confidence[i] : 1
-            if !isCovered && (conf < BoardReading.lowConfidence || k == .unknown) {   // 自信がないマスは黄色枠
+            if !isCovered && !isRoulette && (conf < BoardReading.lowConfidence || k == .unknown) {   // 自信がないマスは黄色枠
                 ctx.stroke(Path(rect.insetBy(dx: 2, dy: 2)), with: .color(.yellow), lineWidth: max(2, cell * 0.06))
             }
         }

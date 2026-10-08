@@ -136,7 +136,8 @@ struct ContentView: View {
                 }
                 toolPicker
                 BoardView(board: b, confidence: model.confidence, result: model.result, progress: model.progress,
-                          constraints: model.activeConstraints, covered: model.coveredCells) { i in
+                          constraints: model.activeConstraints, covered: model.coveredCells,
+                          autoRoulette: model.autoRouletteCells) { i in
                     if model.tapCell(i) {
                         editingCell = i
                         showPicker = true
@@ -265,6 +266,15 @@ struct ContentView: View {
             Text("設定中：\(model.constraintSummary)")
                 .font(.footnote)
                 .accessibilityIdentifier("constraintSummary")
+            Toggle("ルーレットを自動で見つける", isOn: Binding(
+                get: { model.settings.autoRouletteOn },
+                set: { model.settings.autoRoulette = $0 }))
+                .accessibilityIdentifier("autoRouletteToggle")
+            if !model.autoRouletteCells.isEmpty {
+                Text("自動で見つけたルーレット：\(model.autoRouletteCells.count)マス（盤面に「ル」と表示）")
+                    .font(.footnote).foregroundStyle(.secondary)
+                    .accessibilityIdentifier("autoRouletteSummary")
+            }
             DisclosureGroup("消せない状態のドロップ") {
                 ForEach([OrbKind.fire, .water, .wood, .light, .dark, .heart, .jammer, .poison, .mortalPoison], id: \.self) { k in
                     Toggle(k.label, isOn: Binding(get: { model.isUnclearable(k) }, set: { model.setUnclearable(k, $0) }))
@@ -282,7 +292,7 @@ struct ContentView: View {
         }
     }
 
-    static let constraintHelp = "敵のスキルでパズルが縛られたときに設定します。盤面の上の「開始位置」「操作不可」「棘」「雲・ルーレット」を選んでから、盤面のマスを押してください（もう一度押すと外れます）。\n・開始位置：盤面にカーソルが出て、そこから動かし始めるよう指定されたとき\n・操作不可：テープ・お札が貼られたマス（動かせず、指で通れません）\n・棘：動かすとダメージを受けるドロップ（通らないルートにします）\n・雲・ルーレット：色が見えない／変わり続けるマス（消えないものとして計算します）\n・消せない状態：×印が付いた種類のドロップ（消えないものとして計算します）\n縛りは解除するまで続きます。効果が切れたら「縛りをすべて解除」を押してください。"
+    static let constraintHelp = "敵のスキルでパズルが縛られたときに設定します。盤面の上の「開始位置」「操作不可」「棘」「雲・ルーレット」を選んでから、盤面のマスを押してください（もう一度押すと外れます）。\n・開始位置：盤面にカーソルが出て、そこから動かし始めるよう指定されたとき\n・操作不可：テープ・お札が貼られたマス（動かせず、指で通れません）\n・棘：動かすとダメージを受けるドロップ（通らないルートにします）\n・雲・ルーレット：色が見えない／変わり続けるマス（消えないものとして計算します）\n・ルーレットは「ルーレットを自動で見つける」がオンなら、画面共有中に自動で見つけます（盤面が止まっている間に、同じマスの色が変わり続けるのを見て判断。見つけるまで約3秒）。\n・消せない状態：×印が付いた種類のドロップ（消えないものとして計算します）\n縛りは解除するまで続きます。効果が切れたら「縛りをすべて解除」を押してください。"
 
     private var settingsSection: some View {
         Section("探索の設定") {

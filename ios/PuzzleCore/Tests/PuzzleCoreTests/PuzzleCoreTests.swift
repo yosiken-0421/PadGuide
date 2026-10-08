@@ -1028,6 +1028,101 @@ final class LeaderConditionTests: XCTestCase {
     }
 }
 
+// MARK: - ルーレットの自動判定
+
+final class RouletteDetectorTests: XCTestCase {
+    let cycle: [OrbKind] = [.fire, .water, .wood, .light, .dark, .heart]
+
+    /// 指定したマスだけが一定間隔（4フレームに1回）で色を変え続ける盤面
+    private func frames(_ base: Board, roulette: [Int], count: Int, every: Int = 4) -> [[OrbKind]] {
+        (0..<count).map { f in
+            var c = base.cells
+            for (n, i) in roulette.enumerated() { c[i] = cycle[(f / every + n) % cycle.count] }
+            return c
+        }
+    }
+
+    func testFindsRouletteCells() {
+        let base = SyntheticScreen.randomBoard(S65, seed: 601)
+        var d = RouletteDetector()
+        for f in frames(base, roulette: [3, 17], count: 20) { d.feed(f) }
+        XCTAssertEqual(d.cells, [3, 17])
+    }
+
+    /// 止まった盤面・読み違いのちらつき（2種類を行き来）・ドロップを動かしている最中は、ルーレットとみなさない
+    func testDoesNotTriggerFalsely() {
+        let base = SyntheticScreen.randomBoard(S65, seed: 602)
+        var still = RouletteDetector()
+        for _ in 0..<30 { still.feed(base.cells) }
+        XCTAssertTrue(still.cells.isEmpty, "止まった盤面")
+
+        var flicker = RouletteDetector()
+        for f in 0..<30 {
+            var c = base.cells
+            c[5] = f % 3 == 0 ? .dark : .poison      // 闇と毒を行き来する読み違い
+            c[12] = f % 5 == 0 ? .unknown : base.cells[12]
+            flicker.feed(c)
+        }
+        XCTAssertTrue(flicker.cells.isEmpty, "読み違いのちらつき")
+
+        // ドロップを動かしている最中：指の位置のドロップが盤面を移動し、多くのマスが入れ替わる
+        var moving = RouletteDetector()
+        let start = SyntheticScreen.randomBoard(S65, seed: 603)
+        let route = Solver.solve(start, options: SolverOptions(maxSteps: 30, timeLimit: nil, beamWidth: 200))
+        var b = start.cells
+        for k in 1..<route.path.count {
+            b.swapAt(route.path[k - 1], route.path[k])
+            moving.feed(b)
+        }
+        XCTAssertTrue(moving.cells.isEmpty, "ドロップの操作中")
+    }
+
+    /// 見つけた後に操作しても、見つけたマスは保つ。ルーレットが止まったら外す。盤面の大きさが変わったらやり直す
+    func testKeepsAndReleases() {
+        let base = SyntheticScreen.randomBoard(S65, seed: 604)
+        var d = RouletteDetector()
+        for f in frames(base, roulette: [8], count: 20) { d.feed(f) }
+        XCTAssertEqual(d.cells, [8])
+        // 操作中（大きく変わる）は判断しない
+        let other = SyntheticScreen.randomBoard(S65, seed: 605)
+        for _ in 0..<3 { XCTAssertFalse(d.feed(other.cells)) }
+        XCTAssertEqual(d.cells, [8])
+        // ルーレットが止まった盤面がしばらく続くと外す
+        for _ in 0..<20 { d.feed(other.cells) }
+        XCTAssertTrue(d.cells.isEmpty)
+        // 大きさが変わったらやり直し
+        for f in frames(base, roulette: [8], count: 20) { d.feed(f) }
+        XCTAssertEqual(d.cells, [8])
+        d.feed(SyntheticScreen.randomBoard(S76, seed: 606).cells)
+        XCTAssertTrue(d.cells.isEmpty)
+    }
+
+    /// 自動で見つけたマスを見ないマスにすると、ルーレットが回っても計算し直さない（以前のテストと同じ流れ）
+    func testWorksWithLiveSession() {
+        let base = SyntheticScreen.randomBoard(S65, seed: 607)
+        var d = RouletteDetector()
+        let s = LiveSession()
+        s.begin()
+        let reading = { (cells: [OrbKind]) in
+            BoardReading(rect: BoardRect(x: 0, y: 0, cell: 100, size: S65),
+                         cells: cells.map { CellReading(kind: $0, confidence: 0.9, color: RGB(0, 0, 0)) }, brightness: 0.6)
+        }
+        var solves = 0
+        for f in frames(base, roulette: [0, 7, 14], count: 60) {
+            if d.feed(f) { s.forceNextSolve() }
+            s.setIgnored(Array(d.cells))
+            if s.feed(reading(f)) {
+                if !d.cells.isEmpty { solves += 1 }   // 見つけた後の計算回数
+                let b = Board(size: S65, cells: s.stableCells!)
+                let r = Solver.solve(b, options: SolverOptions(maxSteps: 20, timeLimit: nil, beamWidth: 100))
+                s.setRoute(boards: RouteTracker(board: b, path: r.path)?.boards ?? [b.cells])
+            }
+        }
+        XCTAssertEqual(d.cells, [0, 7, 14])
+        XCTAssertEqual(solves, 1, "見つけた後は1回だけ計算し直し、その後はルーレットが回っても計算し直さない（\(solves)回）")
+    }
+}
+
 // MARK: - 通信・接続・破棄
 
 final class ProtocolTests: XCTestCase {

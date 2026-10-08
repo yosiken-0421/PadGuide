@@ -19,6 +19,9 @@ struct AppSettings: Codable, Equatable {
     var goals = Goals()
     /// 敵の妨害による縛り（開始位置固定・操作不可など）。手動で設定し、解除するまで続く
     var constraints: BoardConstraints?
+    /// ルーレットを画面の変化から自動で見つける（nil = オン。以前の保存データでもオンになる）
+    var autoRoulette: Bool?
+    var autoRouletteOn: Bool { autoRoulette ?? true }
 
     var fixedSize: BoardSize? {
         switch sizeMode {
@@ -57,6 +60,8 @@ struct LatestState: Codable {
     /// 診断用：画面共有の映像の形式と大きさ（画像そのものは保存しない）
     var videoFormat: String? = nil
     var frameSize: [Int]? = nil
+    /// 画面共有側で自動で見つけたルーレットのマス
+    var autoHidden: [Int]? = nil
 }
 
 enum SharedStore {
