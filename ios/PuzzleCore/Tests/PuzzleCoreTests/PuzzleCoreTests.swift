@@ -1114,6 +1114,29 @@ final class RouletteDetectorTests: XCTestCase {
         }
     }
 
+    /// 実機と同じく、ルートが出てすぐドロップを動かし始めても（盤面が止まっていなくても）、
+    /// 決まった順（火→水→木→光→闇→回復）に変わり続けるマスはルーレットとして見つける。
+    /// 強化ドロップの読み違いのように2色を行き来するマスや、動かしたドロップの通り道はルーレットとみなさない
+    func testFindsRouletteWhileMoving() {
+        let base = SyntheticScreen.randomBoard(S65, seed: 609)
+        // 上の3段を蛇行しながら動かす（毎フレーム1手）
+        let path = [0, 1, 2, 3, 4, 5, 11, 10, 9, 8, 7, 6, 12, 13, 14, 15, 16, 17]
+        for every in [2, 4] {
+            var d = RouletteDetector()
+            var cur = base.cells
+            for f in 0..<30 {
+                let k = f % (path.count - 1)
+                cur.swapAt(path[k], path[k + 1])          // ドロップを動かしている
+                var c = cur
+                c[27] = cycle[(f / every) % cycle.count]   // ルーレット（4段4列）
+                c[24] = f % 2 == 0 ? .dark : .heart        // 強化ドロップの読み違い（闇⇔回復）
+                d.feed(c)
+            }
+            XCTAssertFalse(d.lastBoardStill, "盤面は動いている")
+            XCTAssertEqual(d.cells, [27], "動かしている最中でもルーレットを見つける（間隔 \(every)）: \(d.diagnostics(cols: 6))")
+        }
+    }
+
     /// 自動で見つけたマスを見ないマスにすると、ルーレットが回っても計算し直さない（以前のテストと同じ流れ）
     func testWorksWithLiveSession() {
         let base = SyntheticScreen.randomBoard(S65, seed: 607)
