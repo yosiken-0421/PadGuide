@@ -386,8 +386,8 @@ public enum BoardReader {
                 continue
             }
             // 雲：ほとんど白で色味がない（実機：彩度 0.04〜0.06・明るさ 0.85）。ドロップの色は見えないが、ドロップはある。
-            // 動かせるが消えないものとして計算する（お邪魔は青みがかった灰色〜紺色で、ここまで白く明るくない）
-            if f.bodyS < 0.12 && f.bodyV > 0.72 && f.greyBrightRatio >= 0.7 {
+            // 動かせるが消えないものとして計算する（実機のお邪魔は暗い灰色〜紺色で明るさ 0.3〜0.6。ここまで白く明るくない）
+            if f.bodyS < 0.09 && f.bodyV > 0.81 && f.greyBrightRatio >= 0.85 {
                 cells.append(CellReading(kind: .unknown, confidence: 0.9, color: f.color, covered: true, cloud: true))
                 continue
             }
