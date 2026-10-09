@@ -1232,6 +1232,7 @@ final class TapeTests: XCTestCase {
         // ドロップを持って帯の上を通り、数フレーム見えなくなっても保つ
         for k in 0..<30 { XCTAssertFalse(t.feed(k % 4 == 0 ? row : [])) }
         XCTAssertEqual(t.cells, row)
+        XCTAssertFalse(t.feed(row))
         for _ in 0..<(TapeTracker.removeFrames - 1) { XCTAssertFalse(t.feed([])) }
         XCTAssertTrue(t.feed([]))
         XCTAssertTrue(t.cells.isEmpty)
