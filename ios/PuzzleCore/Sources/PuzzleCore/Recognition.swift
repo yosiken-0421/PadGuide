@@ -930,6 +930,8 @@ public enum RecognitionDiagnostics {
         if let t = r.taped, !t.isEmpty {
             lines.append("操作不可（テープ）を自動で見つけたマス: "
                          + t.map { "\($0 / r.size.cols + 1)段\($0 % r.size.cols + 1)列" }.joined(separator: " "))
+        } else {
+            lines.append("操作不可（テープ）を自動で見つけたマス: なし（この画面）")
         }
         return lines.joined(separator: "\n")
     }

@@ -129,7 +129,11 @@ final class SampleHandler: RPBroadcastSampleHandler {
             if let better = BoardDetector.detect(src, fixedSize: settings.fixedSize, classifier: classifier),
                Self.differs(better.rect, r),
                BoardDetector.placementScore(better, screenHeight: Double(src.height))
-                > BoardDetector.placementScore(reading, screenHeight: Double(src.height)) + 0.03 {
+                > BoardDetector.placementScore(reading, screenHeight: Double(src.height))
+                  + (better.rect.size == r.size ? 0.03 : 0.12) {
+                // （大きさの違う盤面へは、はっきり良いときだけ切り替える。ちゃんと読めている盤面を、
+                //   盤面の上の表示を含む別の大きさの枠と取り違えないように。階が変わって大きさが変わったときは、
+                //   今の枠では読めなくなるので探し直しで切り替わる）
                 rect = better.rect
                 session.forceNextSolve()
                 return

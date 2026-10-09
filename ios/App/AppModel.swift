@@ -366,12 +366,22 @@ final class AppModel: ObservableObject {
     /// 診断情報（各マスの判定と代表色の数値だけ。画像は含まない）
     var diagnosticsText: String? {
         if let r = screenshotReading {
-            return RecognitionDiagnostics.text(r, source: "スクリーンショット", imageSize: screenshotSize)
+            return RecognitionDiagnostics.text(r, source: "スクリーンショット", imageSize: screenshotSize) + "\n" + Self.buildLine
         }
         guard let l = latest, let r = l.reading else { return nil }
         let size = l.frameSize.flatMap { $0.count == 2 ? ($0[0], $0[1]) : nil }
+        let tape = "操作不可（テープ）：使っているマス " + ((l.autoTaped ?? []).isEmpty ? "なし"
+            : (l.autoTaped ?? []).map { "\($0 / r.size.cols + 1)段\($0 % r.size.cols + 1)列" }.joined(separator: " "))
         return RecognitionDiagnostics.text(r, source: "画面共有 " + (l.videoFormat ?? ""), imageSize: size)
-            + (l.rouletteInfo.map { "\n" + $0 } ?? "")
+            + (l.rouletteInfo.map { "\n" + $0 } ?? "") + "\n" + tape + "\n" + Self.buildLine
+    }
+
+    /// 診断用：インストールされているアプリのバージョンとビルド番号
+    static var buildLine: String {
+        let info = Bundle.main.infoDictionary
+        let v = info?["CFBundleShortVersionString"] as? String ?? "?"
+        let b = info?["CFBundleVersion"] as? String ?? "?"
+        return "アプリ: \(v) (\(b))"
     }
 
     func copyDiagnostics() {
