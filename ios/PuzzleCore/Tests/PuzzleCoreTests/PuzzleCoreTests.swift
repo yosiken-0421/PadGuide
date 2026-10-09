@@ -1258,15 +1258,13 @@ final class ProtocolTests: XCTestCase {
             """)
         let route = startRoute(s, start)
         let end = BoardOps.apply(start: route.start, moves: route.moves, to: start)!
-        // 一番上の段の3マスだけが入れ替わった（各色の個数の変化は2個以内）
+        // 一番上の段の3マスだけが消えて、新しいドロップが落ちてきた（コンボ1個分。落ちた色は消えた色と違う）
         var next = end
-        let top = [0, 1, 2]
-        let colors: [OrbKind] = [.water, .fire, .wood]
-        for (i, c) in zip(top, colors) where next.cells[i] != c { next.cells[i] = c }
-        let changed = zip(end.cells, next.cells).filter { $0 != $1 }.count
-        if changed >= LiveSession.newBoardThreshold {
-            XCTAssertTrue(feedStable(s, next), "3マス以上変われば、色の個数がほぼ同じでも次の盤面として読み直す")
-        }
+        let fresh = OrbKind.allCases.first { k in k.isMatchable && k.rawValue <= 5 && !next.cells[0...2].contains(k) }!
+        for i in 0...2 { next.cells[i] = fresh }
+        XCTAssertEqual(zip(end.cells, next.cells).filter { $0 != $1 }.count, 3)
+        XCTAssertGreaterThanOrEqual(LiveSession.countChange(end.cells, next.cells), LiveSession.countChangeThreshold)
+        XCTAssertTrue(feedStable(s, next), "3マスだけ変わった次の盤面も読み直す")
         // 色の個数がほぼ同じ別の盤面（ドロップをまとめて並べ替えたような盤面）でも読み直す
         var shuffled = end
         shuffled.cells.reverse()
@@ -1307,12 +1305,37 @@ final class ProtocolTests: XCTestCase {
         // 次の盤面（大きく変わった）では再計算する
         XCTAssertTrue(feedStable(s, SyntheticScreen.randomBoard(S65, seed: 77)))
 
-        // 見ないマスを設定しないと、ルーレットが変わるたびに計算し直してしまう（以前の動き）
-        let s2 = LiveSession()
-        s2.begin()
-        XCTAssertTrue(feedStable(s2, spun(start, 0)))
-        s2.setRoute(boards: RouteTracker(board: spun(start, 0), path: route.path)!.boards)
-        XCTAssertTrue(feedStable(s2, spun(start, 1)))
+    }
+
+    /// ルートを表示した後、ドロップを動かしている最中に、指でマスが隠れたり・ルートと少し違う動かし方をしても、
+    /// ルートを計算し直さない（操作の途中で矢印の向きが変わらない）
+    func testRouteStaysWhileMovingOffRouteWithFinger() {
+        let s = LiveSession()
+        s.begin()
+        let start = SyntheticScreen.randomBoard(S65, seed: 44)
+        let route = startRoute(s, start)
+        XCTAssertGreaterThan(route.steps, 6)
+        // ルートどおりに数手動かす
+        var cur = start
+        for k in 1...4 {
+            cur.cells.swapAt(route.path[k - 1], route.path[k])
+            XCTAssertFalse(feedStable(s, cur), "\(k) 手目")
+        }
+        // ルートから外れて2手動かす（入れ替えるだけなので、色の個数は変わらない）
+        var pos = route.path[4]
+        for _ in 0..<2 {
+            let nb = [pos - 6, pos + 6, pos - 1, pos + 1].first { $0 >= 0 && $0 < 30 && !route.path.contains($0) && abs($0 % 6 - pos % 6) <= 1 }
+            guard let n = nb else { break }
+            cur.cells.swapAt(pos, n); pos = n
+            XCTAssertFalse(feedStable(s, cur), "ルートから少し外れても計算し直さない")
+        }
+        // 指でマスが隠れて、2マスを読み違えた
+        var hidden = cur
+        hidden.cells[pos] = .heart
+        hidden.cells[(pos + 7) % 30] = .fire
+        XCTAssertFalse(feedStable(s, hidden), "指で隠れて読み違えても計算し直さない")
+        // 指を離してコンボで消え、新しいドロップが落ちてきた次の盤面では計算し直す
+        XCTAssertTrue(feedStable(s, SyntheticScreen.randomBoard(S65, seed: 78)), "次の盤面では計算し直す")
     }
 
     func testForceNextSolve() {

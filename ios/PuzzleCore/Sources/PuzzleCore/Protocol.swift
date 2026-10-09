@@ -231,6 +231,15 @@ public final class LiveSession: @unchecked Sendable {
     private var _ignored: Set<Int> = []
     /// 表示中のルートのどの盤面とも、このマス数以上違えば「次の盤面」とみなす
     public static let newBoardThreshold = 3
+    /// ドロップを動かし始めた後は、指で隠れる・持っているドロップが浮く・ルートと少し違う動かし方などで
+    /// 数マスずれる。そこで「色の個数も変わった」ときだけ次の盤面とみなす
+    /// （入れ替えるだけなら色の個数は変わらない。コンボで消えて新しいドロップが落ちると変わる。
+    ///  指で1〜2マス隠れて読み違えても、色の個数の変化は 4 以下）
+    public static let countChangeThreshold = 5
+    /// 動かし始めた後でも、これだけ違えば色の個数によらず次の盤面（スキルで盤面が入れ替わったなど）
+    public static let bigChangeThreshold = 10
+    /// 表示中のルートで、ドロップを動かし始めたか
+    private var _operationStarted = false
     public private(set) var isActive = false
 
     public init() {}
@@ -253,20 +262,41 @@ public final class LiveSession: @unchecked Sendable {
         _lastReading = reading
         var kinds = reading.cells.map { $0.kind }
         for i in _ignored where i < kinds.count { kinds[i] = .unknown }
+        // ルートを表示した後、最初の盤面から2マス以上変わったら「動かし始めた」とみなす
+        if _routeBoards.count > 1 && !_operationStarted && Self.routeMismatch(_routeBoards[0], kinds) >= 2 {
+            _operationStarted = true
+        }
         guard _stabilizer.feed(kinds), let cells = _stabilizer.consensus else { return false }
         _stableCells = cells
         if !_routeBoards.isEmpty {
             let closest = _routeBoards.map { Self.routeMismatch($0, cells) }.min() ?? Int.max
-            if closest < Self.newBoardThreshold { return false }   // ルートの途中（操作中・変化なし）
+            if _operationStarted {
+                // 動かしている最中：色の個数が変わった（コンボで消えて落ちてきた）か、盤面がまるごと変わったときだけ次の盤面
+                let counts = Self.countChange(_routeBoards[0], cells)
+                let next = (closest >= Self.newBoardThreshold && counts >= Self.countChangeThreshold)
+                    || closest >= Self.bigChangeThreshold
+                if !next { return false }
+            } else if closest < Self.newBoardThreshold {
+                return false   // ルートの途中（変化なし）
+            }
         }
         _lastSolved = cells
         _routeBoards = [cells]          // ルートが決まるまでは、この盤面と比べる
+        _operationStarted = false
         return true
     }
 
     /// 見ないマス（雲・ルーレット）を設定する。そのマスは「不明」として扱う
     public func setIgnored(_ cells: [Int]) {
         lock.lock(); _ignored = Set(cells); lock.unlock()
+    }
+
+    /// 色ごとの個数の変化の合計（「不明」は数えない）
+    static func countChange(_ a: [OrbKind], _ b: [OrbKind]) -> Int {
+        var ca = [Int](repeating: 0, count: OrbKind.allCases.count), cb = ca
+        for k in a where k != .unknown { ca[Int(k.rawValue)] += 1 }
+        for k in b where k != .unknown { cb[Int(k.rawValue)] += 1 }
+        return zip(ca, cb).reduce(0) { $0 + abs($1.0 - $1.1) }
     }
 
     /// ルートの盤面との違い。どちらかが「不明」のマス（見ないマス・読めないマス）は数えない
@@ -283,12 +313,12 @@ public final class LiveSession: @unchecked Sendable {
     /// 計算したルートで起こりうる盤面を登録する（ルートがなければ計算した盤面だけ）
     public func setRoute(boards: [[OrbKind]]) {
         lock.lock(); defer { lock.unlock() }
-        if !boards.isEmpty { _routeBoards = boards }
+        if !boards.isEmpty { _routeBoards = boards; _operationStarted = false }
     }
 
     /// 表示中のルートを手放して、次に確定した盤面で必ず再計算する（「再探索」など）
     public func forceNextSolve() {
-        lock.lock(); _lastSolved = nil; _routeBoards = []; _stabilizer.reset(); lock.unlock()
+        lock.lock(); _lastSolved = nil; _routeBoards = []; _operationStarted = false; _stabilizer.reset(); lock.unlock()
     }
 
     public func store(result: ResultMessage) {
@@ -316,6 +346,7 @@ public final class LiveSession: @unchecked Sendable {
         _lastSolved = nil
         _lastResult = nil
         _routeBoards = []
+        _operationStarted = false
         _stableCells = nil
         _stabilizer.reset()
     }
