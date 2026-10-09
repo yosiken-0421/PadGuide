@@ -78,7 +78,9 @@ public struct RouletteDetector: Sendable {
         for (a, b) in zip(recent.dropLast(), recent.dropFirst()) {
             for i in 0..<n where a[i] != b[i] { recentChanges[i] += 1 }
         }
-        let others = (0..<n).filter { !cycling.contains($0) && !ordered.contains($0) && !cells.contains($0) }
+        // （ルーレットの候補も「変わったマス」に数える。動かしている道に沿って変わったマスを候補として除くと、
+        //   盤面が止まっているように見えてしまうため。見つけ済みのマスと、決まった順に変わったマスだけ除く）
+        let others = (0..<n).filter { !ordered.contains($0) && !cells.contains($0) }
         let movedCells = others.filter { recentChanges[$0] > 0 }.count
         let boardStill = movedCells <= Self.noisyCells
         lastChanges = changes
