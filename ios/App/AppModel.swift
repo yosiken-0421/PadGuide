@@ -44,6 +44,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var coveredCells: Set<Int> = []
     /// 画面共有側で自動で見つけたルーレットのマス
     @Published private(set) var autoRouletteCells: Set<Int> = []
+    /// 画面から自動で見つけた操作不可（テープ）のマス
+    @Published private(set) var autoTapedCells: Set<Int> = []
     /// UI テスト用：見本盤面で「何手目まで進んだか」を指定する（-demoProgress N）
     private var demoProgress: Int?
     private var latest: LatestState?
@@ -82,7 +84,7 @@ final class AppModel: ObservableObject {
             latest = nil
             lastSeq = -1
             if !edited && !showingSample {
-                board = nil; result = nil; confidence = []; colors = []; coveredCells = []; autoRouletteCells = []; progress = nil; offRoute = false
+                board = nil; result = nil; confidence = []; colors = []; coveredCells = []; autoRouletteCells = []; autoTapedCells = []; progress = nil; offRoute = false
             }
         }
         // 接続状態の確認（約 10 秒ごと）
@@ -110,6 +112,7 @@ final class AppModel: ObservableObject {
             colors = l.reading?.cells.map { $0.color } ?? []
             coveredCells = Set((l.reading?.cells ?? []).indices.filter { l.reading!.cells[$0].covered == true })
             autoRouletteCells = Set(l.autoHidden ?? [])
+            autoTapedCells = Set(l.autoTaped ?? [])
             result = r
         }
         progress = l.progress
@@ -165,9 +168,11 @@ final class AppModel: ObservableObject {
         let flag = CancellationFlag()
         cancelFlag = flag
         solving = true
-        let opts = settings.solverOptions
+        var opts = settings.solverOptions
         let goals = settings.goals
-        let cons = settings.constraints
+        // 自動で見つけた操作不可（テープ）のマスも、動かせないマスとして計算する
+        let cons = BoardConstraints.merging(settings.constraints, autoBlocked: Array(autoTapedCells), size: b.size)
+        opts.constraints = cons
         let conf = confidence
         let source = edited ? "iphone-manual" : "iphone"
         Task.detached(priority: .userInitiated) {
@@ -210,6 +215,12 @@ final class AppModel: ObservableObject {
     var activeConstraints: BoardConstraints? {
         guard let c = settings.constraints else { return nil }
         return board.map { c.effective(for: $0.size) } ?? c
+    }
+
+    /// 盤面に表示する縛り（手動の設定と、自動で見つけた操作不可）
+    var boardConstraints: BoardConstraints? {
+        guard let b = board else { return activeConstraints }
+        return BoardConstraints.merging(activeConstraints, autoBlocked: Array(autoTapedCells), size: b.size)
     }
 
     var constraintSummary: String { activeConstraints?.summary ?? "なし" }
@@ -324,6 +335,7 @@ final class AppModel: ObservableObject {
                 self.colors = rd.cells.map { $0.color }
                 self.coveredCells = Set(rd.cells.indices.filter { rd.cells[$0].covered == true })
                 self.autoRouletteCells = []
+                self.autoTapedCells = Set(rd.taped ?? [])
                 self.progress = nil
                 self.offRoute = false
                 self.correctionNote = nil
@@ -400,6 +412,7 @@ final class AppModel: ObservableObject {
         colors = []
         coveredCells = []
         autoRouletteCells = []
+        autoTapedCells = []
         resolve()
     }
 
@@ -413,6 +426,7 @@ final class AppModel: ObservableObject {
         colors = []
         coveredCells = []
         autoRouletteCells = []
+        autoTapedCells = []
         progress = nil
         offRoute = false
         solving = false
@@ -432,6 +446,7 @@ final class AppModel: ObservableObject {
         colors = []
         coveredCells = []
         autoRouletteCells = []
+        autoTapedCells = []
         resolve()
     }
 }

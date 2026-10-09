@@ -64,6 +64,8 @@ struct LatestState: Codable {
     var autoHidden: [Int]? = nil
     /// 診断用：ルーレットの自動判定の判断材料（文章）
     var rouletteInfo: String? = nil
+    /// 画面共有側で自動で見つけた操作不可（テープ）のマス
+    var autoTaped: [Int]? = nil
 }
 
 enum SharedStore {

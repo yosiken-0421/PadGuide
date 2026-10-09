@@ -133,6 +133,8 @@ public struct BoardReading: Codable, Equatable, Sendable {
     public var brightness: Double
     /// 盤面全体が暗く・色が薄くなっている（敵の行動中などでパズルできない状態）。この間はルートを出さない
     public var dimmed: Bool? = nil
+    /// 操作不可（テープ）が貼られたマス。画面の帯から自動で見つける（なければ nil）
+    public var taped: [Int]? = nil
 
     public var size: BoardSize { rect.size }
     public var board: Board { Board(size: rect.size, cells: cells.map { $0.kind }) }
@@ -200,8 +202,22 @@ public enum BoardReader {
     /// - 光沢（白いハイライト）や強化マーク・ロックの模様は「鮮やかでない画素」として除外し、基礎色だけを見る
     /// - 縁の影で暗い画素も除外する
     /// - satMin: 「鮮やかな画素」とみなす彩度。画面全体の色が薄い盤面では下げる（盤面ごとに決める）
-    static func feature(_ src: PixelSource, cx: Double, cy: Double, cell: Double, satMin: Double = 0.30) -> CellFeature {
+    static func feature(_ src: PixelSource, cx: Double, cy: Double, cell: Double, satMin: Double = 0.30,
+                        points: [(Double, Double)]? = nil) -> CellFeature {
         let patch = max(1, Int(cell * 0.02))
+        // 見る位置（マスの中心からのずれ。マスの大きさを 1 とする）。ふつうは同心円状、テープのマスは見えている所だけ
+        var offsets: [(Double, Double)] = []
+        if let points {
+            offsets = points
+        } else {
+            let rings: [(Double, Int)] = [(0.0, 1), (0.1, 6), (0.19, 8), (0.28, 10), (0.35, 12)]
+            for (radius, count) in rings {
+                for k in 0..<count {
+                    let ang = (Double(k) + (radius == 0.19 || radius == 0.35 ? 0.5 : 0)) / Double(count) * 2 * Double.pi
+                    offsets.append((cos(ang) * radius, sin(ang) * radius))
+                }
+            }
+        }
         var sx = 0.0, sy = 0.0, wsum = 0.0
         var colorful = 0, greyBright = 0, grey = 0, total = 0
         var vs = 0.0, ss = 0.0
@@ -209,12 +225,10 @@ public enum BoardReader {
         var tx = 0.0, ty = 0.0, tw = 0.0
         var bodyS = 0.0, bodyV = 0.0, bodyN = 0, dark = 0
         var gr = 0, gg = 0, gb = 0, gn = 0
-        let rings: [(Double, Int)] = [(0.0, 1), (0.1, 6), (0.19, 8), (0.28, 10), (0.35, 12)]
-        for (radius, count) in rings {
-            for k in 0..<count {
-                let ang = (Double(k) + (radius == 0.19 || radius == 0.35 ? 0.5 : 0)) / Double(count) * 2 * Double.pi
-                let x = Int(cx + cos(ang) * radius * cell)
-                let y = Int(cy + sin(ang) * radius * cell)
+        do {
+            for (ox, oy) in offsets {
+                let x = Int(cx + ox * cell)
+                let y = Int(cy + oy * cell)
                 let c = average(src, x, y, patch)
                 let (h, sat, v) = c.hsv
                 total += 1
@@ -292,6 +306,15 @@ public enum BoardReader {
     /// 3. 手動修正で覚えた色があれば、それを優先する
     public static func read(_ src: PixelSource, rect: BoardRect, classifier: ColorClassifier) -> BoardReading {
         let size = rect.size
+        // 操作不可（テープ）：行・列をまたぐ帯が貼られたマスは、帯に隠れていない所だけで色を読む
+        let bands = tapeBands(src, rect: rect)
+        var tapePoints: [Int: [(Double, Double)]] = [:]
+        for r in 0..<size.rows {
+            for c in 0..<size.cols {
+                let mine = bands.filter { $0.vertical ? $0.index == c : $0.index == r }
+                if !mine.isEmpty { tapePoints[r * size.cols + c] = visiblePoints(excluding: mine) }
+            }
+        }
         func features(_ satMin: Double) -> [CellFeature] {
             var out: [CellFeature] = []
             out.reserveCapacity(size.count)
@@ -299,7 +322,9 @@ public enum BoardReader {
                 for c in 0..<size.cols {
                     let cx = rect.x + (Double(c) + 0.5) * rect.cell
                     let cy = rect.y + (Double(r) + 0.5) * rect.cell
-                    out.append(feature(src, cx: cx, cy: cy, cell: rect.cell, satMin: satMin))
+                    let pts = tapePoints[r * size.cols + c]
+                    out.append(feature(src, cx: cx, cy: cy, cell: rect.cell, satMin: satMin,
+                                       points: pts.flatMap { $0.count >= 8 ? $0 : nil }))
                 }
             }
             return out
@@ -353,6 +378,11 @@ public enum BoardReader {
         var vSum = 0.0
         for f in feats {
             vSum += f.meanV
+            // テープが縦横に重なって、ドロップがほとんど見えないマス：色は分からないが、ドロップはある
+            if let pts = tapePoints[cells.count], pts.count < 8 {
+                cells.append(CellReading(kind: .unknown, confidence: 0.9, color: f.color, covered: true))
+                continue
+            }
             // 手動修正で覚えた色を優先
             if !classifier.learned.isEmpty {
                 let (k, conf) = classifier.classify(f.color)
@@ -459,7 +489,97 @@ public enum BoardReader {
         let bv = feats.map { $0.bodyV }.sorted()[feats.count / 2]
         let bsMed = feats.map { $0.bodyS }.sorted()[feats.count / 2]
         let dimmed = bv < 0.45 && bsMed < 0.4
-        return BoardReading(rect: rect, cells: cells, brightness: vSum / Double(max(1, size.count)), dimmed: dimmed ? true : nil)
+        let taped = tapePoints.keys.sorted()
+        return BoardReading(rect: rect, cells: cells, brightness: vSum / Double(max(1, size.count)), dimmed: dimmed ? true : nil,
+                            taped: taped.isEmpty ? nil : taped)
+    }
+
+    /// 操作不可（テープ）の帯。行（横の帯）または列（縦の帯）に貼られ、そのマスのドロップは動かせない。
+    /// from / to は帯の端の位置（そのマスの上端・左端を 0、下端・右端を 1 とする）
+    public struct TapeBand: Equatable, Sendable {
+        public var vertical: Bool
+        public var index: Int
+        public var from: Double
+        public var to: Double
+    }
+
+    /// 画面の帯（実機：濃い茶色の線で上下を縁取られた金色の模様の帯が、盤面の端から端までまっすぐ続く）を探す。
+    /// ドロップは丸いので、盤面の幅いっぱいにまっすぐ続く暗い線や金色の線はできない（ドロップの境目でも暗い所は半分ほど）
+    public static func tapeBands(_ src: PixelSource, rect: BoardRect) -> [TapeBand] {
+        tapeBands(src, rect: rect, vertical: false) + tapeBands(src, rect: rect, vertical: true)
+    }
+
+    static func tapeBands(_ src: PixelSource, rect: BoardRect, vertical: Bool) -> [TapeBand] {
+        let c = rect.cell
+        let length = vertical ? rect.width : rect.height   // 線を順に見ていく方向の長さ
+        let span = vertical ? rect.height : rect.width     // 1 本の線の長さ（盤面の端から端まで）
+        let count = vertical ? rect.size.cols : rect.size.rows
+        func pixel(_ t: Double, _ u: Double) -> (h: Double, s: Double, v: Double) {
+            let x = vertical ? rect.x + t : rect.x + u
+            let y = vertical ? rect.y + u : rect.y + t
+            let p = src.rgb(min(max(Int(x), 0), src.width - 1), min(max(Int(y), 0), src.height - 1))
+            return RGB(p.0, p.1, p.2).hsv
+        }
+        /// その線のうち、暗い画素・帯の金色の画素の割合
+        func line(_ t: Int, _ n: Int) -> (dark: Double, tape: Double) {
+            var d = 0, g = 0
+            for k in 0..<n {
+                let u = c * 0.02 + (span - c * 0.04) * (Double(k) + 0.5) / Double(n)
+                let (h, s, v) = pixel(Double(t), u)
+                if v < 0.35 { d += 1 } else if (25...60).contains(h) && (0.25...0.75).contains(s) && v >= 0.55 { g += 1 }
+            }
+            return (Double(d) / Double(n), Double(g) / Double(n))
+        }
+        let t0 = Int(c * 0.08), t1 = Int(length - c * 0.08)
+        guard t1 > t0 + 2 else { return [] }
+        // 1. 盤面の幅いっぱいに続く暗い線（ドロップを持って帯の上を通っても見つかるように、4分の3以上で十分とする）
+        var darkLines: [Int] = []
+        for t in t0..<t1 where line(t, 24).dark >= 0.7 && line(t, 60).dark >= 0.75 { darkLines.append(t) }
+        var edges: [(Int, Int)] = []
+        for t in darkLines {
+            if let last = edges.last, t - last.1 <= 2 { edges[edges.count - 1].1 = t } else { edges.append((t, t)) }
+        }
+        guard edges.count >= 2 else { return [] }
+        // 2. となり合う2本の暗い線の間が、帯の太さで、金色の模様が続いていれば帯
+        var out: [TapeBand] = []
+        for i in 0..<(edges.count - 1) {
+            let a = edges[i].1, b = edges[i + 1].0
+            let h = Double(b - a) / c
+            guard h >= 0.3, h <= 0.8 else { continue }
+            // 帯の内側の縁は金色の線
+            let ea = (a + 1)...min(a + 3, b - 1), eb = max(b - 3, a + 1)...(b - 1)
+            guard ea.map({ line($0, 60).tape }).max() ?? 0 >= 0.6,
+                  eb.map({ line($0, 60).tape }).max() ?? 0 >= 0.6 else { continue }
+            var sum = 0.0, n = 0
+            for t in stride(from: a + 1, to: b, by: 2) { sum += line(t, 40).tape; n += 1 }
+            guard n > 0, sum / Double(n) >= 0.35 else { continue }
+            let mid = Double(a + b) / 2 / c
+            let index = Int(mid)
+            guard index >= 0, index < count else { continue }
+            out.append(TapeBand(vertical: vertical, index: index,
+                                from: Double(a) / c - Double(index), to: Double(b) / c - Double(index)))
+        }
+        return out
+    }
+
+    /// テープの帯に隠れていない所の、ドロップの内側の見る位置（マスの中心からのずれ）
+    static func visiblePoints(excluding bands: [TapeBand]) -> [(Double, Double)] {
+        var pts: [(Double, Double)] = []
+        var fy = 0.08
+        while fy <= 0.92 {
+            var fx = 0.12
+            while fx <= 0.88 {
+                let inside = (fx - 0.5) * (fx - 0.5) + (fy - 0.5) * (fy - 0.5) <= 0.40 * 0.40
+                let hidden = bands.contains { b in
+                    let p = b.vertical ? fx : fy
+                    return p >= b.from - 0.05 && p <= b.to + 0.05
+                }
+                if inside && !hidden { pts.append((fx - 0.5, fy - 0.5)) }
+                fx += 0.06
+            }
+            fy += 0.035
+        }
+        return pts
     }
 
     /// 彩度の低い色のマスをお邪魔と判断するか（紫系＝毒・猛毒は除く）
@@ -806,6 +926,10 @@ public enum RecognitionDiagnostics {
                                     c.kind.key, c.confidence, c.color.r, c.color.g, c.color.b, h, s, v))
             }
             lines.append("\(row + 1)段目: " + cells.joined(separator: " | "))
+        }
+        if let t = r.taped, !t.isEmpty {
+            lines.append("操作不可（テープ）を自動で見つけたマス: "
+                         + t.map { "\($0 / r.size.cols + 1)段\($0 % r.size.cols + 1)列" }.joined(separator: " "))
         }
         return lines.joined(separator: "\n")
     }

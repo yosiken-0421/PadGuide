@@ -56,6 +56,18 @@ public struct BoardConstraints: Codable, Equatable, Sendable {
         return c.isEmpty ? nil : c
     }
 
+    /// 手動の縛りに、画面から自動で見つけた操作不可（テープ）のマスを足した縛り（手動の設定そのものは変えない）
+    public static func merging(_ base: BoardConstraints?, autoBlocked: [Int], size: BoardSize) -> BoardConstraints? {
+        let add = autoBlocked.filter { $0 >= 0 && $0 < size.count }
+        guard !add.isEmpty else { return base }
+        var c = base?.effective(for: size) ?? BoardConstraints(size: size)
+        for i in add.sorted() where !c.blocked.contains(i) && c.fixedStart != i {
+            c.thorns.removeAll { $0 == i }
+            c.blocked.append(i)
+        }
+        return c
+    }
+
     /// 指で通れるマスか（操作不可・棘は通らない）
     public func canEnter(_ i: Int) -> Bool { !blocked.contains(i) && !thorns.contains(i) }
 

@@ -136,7 +136,7 @@ struct ContentView: View {
                 }
                 toolPicker
                 BoardView(board: b, confidence: model.confidence, result: model.result, progress: model.progress,
-                          constraints: model.activeConstraints, covered: model.coveredCells,
+                          constraints: model.boardConstraints, covered: model.coveredCells,
                           autoRoulette: model.autoRouletteCells) { i in
                     if model.tapCell(i) {
                         editingCell = i
@@ -274,6 +274,11 @@ struct ContentView: View {
                 Text("自動で見つけたルーレット：\(model.autoRouletteCells.count)マス（盤面に「ル」と表示）")
                     .font(.footnote).foregroundStyle(.secondary)
                     .accessibilityIdentifier("autoRouletteSummary")
+            }
+            if !model.autoTapedCells.isEmpty {
+                Text("自動で見つけた操作不可（テープ）：\(model.autoTapedCells.count)マス（盤面に「不可」と表示。ここは通らないルートにします）")
+                    .font(.footnote).foregroundStyle(.secondary)
+                    .accessibilityIdentifier("autoTapedSummary")
             }
             DisclosureGroup("消せない状態のドロップ") {
                 ForEach([OrbKind.fire, .water, .wood, .light, .dark, .heart, .jammer, .poison, .mortalPoison], id: \.self) { k in

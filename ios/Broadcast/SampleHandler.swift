@@ -36,6 +36,9 @@ final class SampleHandler: RPBroadcastSampleHandler {
     private var autoHiddenSnapshot: [Int] = []
     private var rouletteInfo = ""
     private var rouletteRect: BoardRect?
+    /// 画面から自動で見つけた操作不可（テープ）のマス（ちらつかないように数フレーム続けて見えたものだけ使う）
+    private var tape = TapeTracker()
+    private var autoTapedSnapshot: [Int] = []
     private var frameSize: [Int] = []
 
     private func now() -> Double { Date().timeIntervalSince1970 }
@@ -43,6 +46,7 @@ final class SampleHandler: RPBroadcastSampleHandler {
     override func broadcastStarted(withSetupInfo setupInfo: [String: NSObject]?) {
         session.begin()
         roulette.reset()
+        tape.reset()
         reloadSettings()
         SharedStore.heartbeat()
         SharedStore.clearLatest()
@@ -53,6 +57,7 @@ final class SampleHandler: RPBroadcastSampleHandler {
         cancelFlag?.cancel()
         session.end()                       // 保持しているデータを破棄
         roulette.reset()
+        tape.reset()
         lock.lock(); tracker = nil; shownResult = nil; shownReading = nil; lock.unlock()
         SharedStore.clearLatest()
         SharedStore.clearHeartbeat()
@@ -133,10 +138,19 @@ final class SampleHandler: RPBroadcastSampleHandler {
 
         // ルーレットの自動判定：見つけたマスが変わったら、そのマスを見ないで計算し直す
         // （盤面の位置が変わったときだけやり直す。演出中などに一時的に読めなくなっても、見つけたマスは保つ）
-        if let old = rouletteRect, Self.differs(old, r) { roulette.reset() }
+        if let old = rouletteRect, Self.differs(old, r) { roulette.reset(); tape.reset() }
         rouletteRect = r
+
+        // 操作不可（テープ）の自動判定：貼られた・はがれたら計算し直す（ドロップを動かしている最中は計算し直さない）
+        let tapeChanged = tape.feed(Set(reading.taped ?? []))
+        lock.lock(); let moving = (tracker?.progress ?? 0) > 0; autoTapedSnapshot = tape.cells.sorted(); lock.unlock()
+        if tapeChanged && !moving { session.forceNextSolve() }
+
         if settings.autoRouletteOn {
-            if roulette.feed(reading.cells.map { $0.kind }) { session.forceNextSolve() }
+            // テープのマスはルーレットではない（帯の下のドロップの色の読み違いを、ルーレットと間違えないように見ない）
+            var kinds = reading.cells.map { $0.kind }
+            for i in tape.cells where i < kinds.count { kinds[i] = .unknown }
+            if roulette.feed(kinds) { session.forceNextSolve() }
         } else if !roulette.cells.isEmpty {
             roulette.reset()
             session.forceNextSolve()
@@ -173,7 +187,9 @@ final class SampleHandler: RPBroadcastSampleHandler {
         cancelFlag?.cancel()                 // 前の計算は中断
         let flag = CancellationFlag()
         cancelFlag = flag
-        let options = settings.solverOptions
+        var options = settings.solverOptions
+        // 自動で見つけた操作不可（テープ）のマスは、動かせず指で通れないマスとして計算する
+        options.constraints = BoardConstraints.merging(options.constraints, autoBlocked: Array(tape.cells), size: reading.size)
         let autoHidden = roulette.cells
         let goals = settings.goals
         // 直近のフレームの多数決で確定した盤面を使う（1フレームだけの読み違いを入れない）
@@ -227,10 +243,10 @@ final class SampleHandler: RPBroadcastSampleHandler {
 
     private func publish(_ msg: ResultMessage, reading: BoardReading?, progress: Int? = nil, offRoute: Bool = false,
                          sendToPC: Bool = true) {
-        lock.lock(); seq += 1; let s = seq; let vf = videoFormat; let fs = frameSize; let ah = autoHiddenSnapshot; let ri = rouletteInfo; lock.unlock()
+        lock.lock(); seq += 1; let s = seq; let vf = videoFormat; let fs = frameSize; let ah = autoHiddenSnapshot; let ri = rouletteInfo; let at = autoTapedSnapshot; lock.unlock()
         SharedStore.writeLatest(LatestState(seq: s, reading: reading, result: msg, progress: progress, offRoute: offRoute,
                                             videoFormat: vf, frameSize: fs, autoHidden: ah.isEmpty ? nil : ah,
-                                            rouletteInfo: ri.isEmpty ? nil : ri))
+                                            rouletteInfo: ri.isEmpty ? nil : ri, autoTaped: at.isEmpty ? nil : at))
         if sendToPC { PCLink.push(msg) }
     }
 }

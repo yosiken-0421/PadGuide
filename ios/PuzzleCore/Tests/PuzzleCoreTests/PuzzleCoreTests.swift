@@ -1163,6 +1163,122 @@ final class RouletteDetectorTests: XCTestCase {
     }
 }
 
+// MARK: - 操作不可（テープ）の自動判定
+
+final class TapeTests: XCTestCase {
+    private func screen(_ board: Board, row: Int? = nil, col: Int? = nil, holdAt: Int? = nil)
+        -> (SyntheticScreen, BoardRect) {
+        var sc = SyntheticScreen()
+        let cell = Double(sc.width) / Double(board.size.cols)
+        let y = Double(sc.height) - cell * Double(board.size.rows) - 110
+        sc.drawShinyBoard(board, x: 0, y: y, cell: cell, seed: 9)
+        if row != nil || col != nil { sc.drawTape(x: 0, y: y, cell: cell, size: board.size, row: row, col: col) }
+        if let h = holdAt {   // 持ち上げたドロップが帯の上を通っている
+            let r = h / board.size.cols, c = h % board.size.cols
+            sc.fillCircle(cx: (Double(c) + 0.5) * cell, cy: y + (Double(r) + 0.5) * cell, r: cell * 0.5, RGB(230, 80, 70))
+        }
+        return (sc, BoardRect(x: 0, y: y, cell: cell, size: board.size))
+    }
+
+    /// 横の帯：その段のマスを見つけ、帯に隠れていない所からドロップの色を正しく読む
+    func testFindsTapeRowAndReadsColors() {
+        let board = SyntheticScreen.randomBoard(S65, seed: 701)
+        let (sc, rect) = screen(board, row: 0)
+        let rd = BoardReader.read(sc, rect: rect, classifier: ColorClassifier())
+        XCTAssertEqual(rd.taped, [0, 1, 2, 3, 4, 5])
+        XCTAssertEqual(rd.board, board, "帯の下のドロップの色も読める")
+        XCTAssertTrue(rd.isUsable)
+        XCTAssertTrue(RecognitionDiagnostics.text(rd, source: "test", imageSize: nil).contains("1段1列"))
+    }
+
+    /// 縦の帯（7x6）と、ドロップを持って帯の上を通っているとき
+    func testFindsTapeColumnAndWhileHolding() {
+        let board = SyntheticScreen.randomBoard(S76, seed: 702)
+        let (sc, rect) = screen(board, col: 2)
+        let rd = BoardReader.read(sc, rect: rect, classifier: ColorClassifier())
+        XCTAssertEqual(rd.taped, [2, 9, 16, 23, 30, 37])
+        XCTAssertEqual(rd.board, board)
+
+        let b2 = SyntheticScreen.randomBoard(S65, seed: 703)
+        let (sc2, rect2) = screen(b2, row: 3, holdAt: 3 * 6 + 2)
+        XCTAssertEqual(BoardReader.read(sc2, rect: rect2, classifier: ColorClassifier()).taped, [18, 19, 20, 21, 22, 23])
+    }
+
+    /// テープのない盤面（光ドロップが1段に並んでいても）では見つけない
+    func testNoTapeOnOrdinaryBoards() {
+        for seed in 704..<710 {
+            let board = SyntheticScreen.randomBoard(seed % 2 == 0 ? S65 : S76, seed: UInt64(seed))
+            let (sc, rect) = screen(board)
+            XCTAssertNil(BoardReader.read(sc, rect: rect, classifier: ColorClassifier()).taped, "seed \(seed)")
+        }
+        var cells = SyntheticScreen.randomBoard(S65, seed: 711).cells
+        for c in 0..<6 { cells[6 + c] = .light }
+        let (sc, rect) = screen(Board(size: S65, cells: cells))
+        XCTAssertNil(BoardReader.read(sc, rect: rect, classifier: ColorClassifier()).taped, "光ドロップの段")
+        var flat = SyntheticScreen()
+        let cell = Double(flat.width) / 6
+        flat.drawBoard(Board(size: S65, cells: cells), x: 0, y: 1400, cell: cell)
+        XCTAssertNil(BoardReader.read(flat, rect: BoardRect(x: 0, y: 1400, cell: cell, size: S65),
+                                      classifier: ColorClassifier()).taped, "平らなドロップ")
+    }
+
+    /// ちらつきに左右されない：2 フレーム続けば使い、消えたとみなすのは約 3 秒続けて見えないときだけ
+    func testTapeTrackerSmoothsFlicker() {
+        var t = TapeTracker()
+        let row: Set<Int> = [0, 1, 2, 3, 4, 5]
+        XCTAssertFalse(t.feed(row))
+        XCTAssertTrue(t.feed(row))
+        XCTAssertEqual(t.cells, row)
+        // ドロップを持って帯の上を通り、数フレーム見えなくなっても保つ
+        for k in 0..<30 { XCTAssertFalse(t.feed(k % 4 == 0 ? row : [])) }
+        XCTAssertEqual(t.cells, row)
+        for _ in 0..<(TapeTracker.removeFrames - 1) { XCTAssertFalse(t.feed([])) }
+        XCTAssertTrue(t.feed([]))
+        XCTAssertTrue(t.cells.isEmpty)
+    }
+
+    /// 自動で見つけたテープのマスは「操作不可」としてルートの計算に使い、そのマスを通らない。手動の縛りはそのまま
+    func testTapedCellsAreAvoided() {
+        let manual = BoardConstraints(size: S65, fixedStart: 20, thorns: [7])
+        let merged = BoardConstraints.merging(manual, autoBlocked: [0, 1, 2, 3, 4, 5, 20], size: S65)!
+        XCTAssertEqual(merged.fixedStart, 20)
+        XCTAssertEqual(merged.blocked, [0, 1, 2, 3, 4, 5])
+        XCTAssertEqual(merged.thorns, [7])
+        XCTAssertNil(BoardConstraints.merging(nil, autoBlocked: [], size: S65))
+        // 大きさの違う手動の縛りは使わず、テープだけ使う
+        let other = BoardConstraints.merging(BoardConstraints(size: S76, blocked: [40]), autoBlocked: [1], size: S65)!
+        XCTAssertEqual(other.blocked, [1])
+
+        let board = SyntheticScreen.randomBoard(S65, seed: 712)
+        let cons = BoardConstraints.merging(nil, autoBlocked: Array(0..<6), size: S65)
+        let route = Solver.solve(board, options: SolverOptions(maxSteps: 30, timeLimit: nil, beamWidth: 200, constraints: cons))
+        XCTAssertFalse(route.path.isEmpty)
+        XCTAssertTrue(route.path.allSatisfy { $0 >= 6 }, "テープの段を通らない: \(route.path)")
+    }
+
+    /// 読み違いで一時的にルーレットと見つけたマスは、ドロップを動かしている最中でも、変わらなくなれば外す
+    func testRouletteReleasesFalseCellWhileMoving() {
+        let base = SyntheticScreen.randomBoard(S65, seed: 713)
+        var d = RouletteDetector()
+        let flick: [OrbKind] = [.fire, .light, .dark]
+        for f in 0..<16 {
+            var c = base.cells
+            c[2] = flick[(f / 2) % 3]
+            d.feed(c)
+        }
+        XCTAssertEqual(d.cells, [2])
+        let path = [6, 7, 8, 9, 10, 11, 17, 16, 15, 14, 13, 12, 18, 19, 20, 21]
+        var cur = base.cells
+        for f in 0..<30 {
+            let k = f % (path.count - 1)
+            cur.swapAt(path[k], path[k + 1])
+            d.feed(cur)
+        }
+        XCTAssertFalse(d.lastBoardStill)
+        XCTAssertTrue(d.cells.isEmpty, d.diagnostics(cols: 6))
+    }
+}
+
 // MARK: - 通信・接続・破棄
 
 final class ProtocolTests: XCTestCase {

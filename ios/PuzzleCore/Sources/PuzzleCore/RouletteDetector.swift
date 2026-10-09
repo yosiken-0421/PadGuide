@@ -91,8 +91,12 @@ public struct RouletteDetector: Sendable {
         if boardStill && cycling.count <= Self.maxCells {
             next.formUnion(cycling)
         }
+        // 直近約6秒の間に、3色以上に変わり続けてもいないし決まった順にも変わっていないマスは外す
+        // （ルーレットは 0.5〜1.5 秒ごとに変わるので、本物ならこの間に必ず何度も変わる。
+        //   読み違いで一時的に見つけてしまったマスを、ドロップを動かしている間も持ち続けないように）
+        for i in cells where !cycling.contains(i) && !ordered.contains(i) { next.remove(i) }
         guard next.count <= Self.maxCells else { return false }
-        if !boardStill {   // 動かしている最中：決まった順に変わったマスを足すだけ（外すのは止まっているときだけ）
+        if !boardStill {   // 動かしている最中：決まった順に変わったマスを足すだけ
             let changed = next != cells
             cells = next
             return changed

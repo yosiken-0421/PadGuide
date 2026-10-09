@@ -164,6 +164,31 @@ struct SyntheticScreen: PixelSource {
         }
     }
 
+    /// 操作不可（テープ）の帯（独自デザイン）：濃い茶色の線で縁取った金色の帯に、茶色の点の模様。
+    /// row を指定すると横の帯、col を指定すると縦の帯。from / to はそのマスの中での帯の端（0〜1）
+    mutating func drawTape(x: Double, y: Double, cell: Double, size: BoardSize, row: Int? = nil, col: Int? = nil,
+                           from: Double = 0.22, to: Double = 0.72) {
+        let vertical = col != nil
+        let idx = Double(row ?? col ?? 0)
+        let a = Int((idx + from) * cell), b = Int((idx + to) * cell)
+        let len = Int(cell * Double(vertical ? size.rows : size.cols))
+        func put(_ t: Int, _ u: Int, _ c: RGB) {
+            if vertical { fillRect(x: Int(x) + t, y: Int(y) + u, w: 1, h: 1, c) }
+            else { fillRect(x: Int(x) + u, y: Int(y) + t, w: 1, h: 1, c) }
+        }
+        let dot = max(2, Int(cell * 0.08)), pitch = max(4, Int(cell * 0.25))
+        for t in a...b {
+            for u in 0..<len {
+                let c: RGB
+                if t - a < 3 || b - t < 3 { c = RGB(60, 35, 20) }
+                else if t - a < 5 || b - t < 5 { c = RGB(235, 205, 130) }
+                else if (u % pitch) < dot && ((t - a) % pitch) < dot { c = RGB(90, 60, 30) }
+                else { c = RGB(205, 170, 100) }
+                put(t, u, c)
+            }
+        }
+    }
+
     /// 盤面の上に、色の付いた四角形（キャラクター枠のような領域）を描く。誤検出しないことの確認用。
     mutating func drawDecoyRow(y: Int, size: Int) {
         let colors = [RGB(220, 60, 60), RGB(60, 120, 230), RGB(70, 200, 90), RGB(240, 220, 80), RGB(160, 70, 210), RGB(240, 140, 200)]
