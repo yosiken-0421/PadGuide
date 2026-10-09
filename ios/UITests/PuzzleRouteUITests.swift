@@ -382,9 +382,14 @@ final class PuzzleRouteUITests: XCTestCase {
         XCTAssertTrue(app.buttons["光"].waitForExistence(timeout: 5), "色の選択肢が出る")
         app.buttons["光"].tap()
 
-        // すべて解除
-        tapButton("clearConstraints", in: app)
-        XCTAssertTrue(show(summary, in: app))
-        XCTAssertTrue(waitLabel(summary, contains: "なし"), summary.label)
+        // すべて解除（色の選択肢が閉じる途中やスクロールの勢いが残っていると押せないことがあるので、何度か試す）
+        sleep(1)
+        var cleared = false
+        for _ in 0..<4 where !cleared {
+            tapButton("clearConstraints", in: app)
+            XCTAssertTrue(show(summary, in: app))
+            cleared = waitLabel(summary, contains: "なし", timeout: 5)
+        }
+        XCTAssertTrue(cleared, summary.label)
     }
 }
