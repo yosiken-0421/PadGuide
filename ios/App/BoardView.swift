@@ -39,6 +39,8 @@ struct BoardView: View {
     var constraints: BoardConstraints? = nil
     /// 黒く覆われて色が見えないマス（暗闇など）
     var covered: Set<Int> = []
+    /// 雲に隠れたマス
+    var clouds: Set<Int> = []
     /// 自動で見つけたルーレットのマス
     var autoRoulette: Set<Int> = []
     var onTapCell: ((Int) -> Void)?
@@ -86,10 +88,12 @@ struct BoardView: View {
             let k = board.cells[i]
             let isCovered = k == .unknown && covered.contains(i)
             let isRoulette = autoRoulette.contains(i)
+            let isCloud = isCovered && clouds.contains(i)
             ctx.fill(Path(ellipseIn: rect.insetBy(dx: cell * 0.1, dy: cell * 0.1)),
-                     with: .color(isCovered ? Color(red: 0.08, green: 0.08, blue: 0.1)
+                     with: .color(isCloud ? Color(red: 0.62, green: 0.66, blue: 0.72)
+                                  : isCovered ? Color(red: 0.08, green: 0.08, blue: 0.1)
                                   : isRoulette ? Color(red: 0.45, green: 0.5, blue: 0.62) : OrbStyle.color(k)))
-            ctx.draw(Text(isCovered ? "暗" : isRoulette ? "ル" : OrbStyle.mark(k))
+            ctx.draw(Text(isCloud ? "雲" : isCovered ? "暗" : isRoulette ? "ル" : OrbStyle.mark(k))
                         .font(.system(size: cell * 0.3, weight: .heavy)).foregroundColor(.white),
                      at: CGPoint(x: rect.midX, y: rect.midY))
             let conf = i < confidence.count ? confidence[i] : 1

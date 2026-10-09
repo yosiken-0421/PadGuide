@@ -110,9 +110,11 @@ public struct CellReading: Codable, Equatable, Sendable {
     public var color: RGB
     /// 黒く覆われて色が見えないドロップ（暗闇など）。色は「不明」だが、読み取りの失敗ではない
     public var covered: Bool?
+    /// 雲に隠れたドロップ（白い雲が上にかぶさって色が見えない）。covered も true にする
+    public var cloud: Bool?
 
-    public init(kind: OrbKind, confidence: Double, color: RGB, covered: Bool? = nil) {
-        self.kind = kind; self.confidence = confidence; self.color = color; self.covered = covered
+    public init(kind: OrbKind, confidence: Double, color: RGB, covered: Bool? = nil, cloud: Bool? = nil) {
+        self.kind = kind; self.confidence = confidence; self.color = color; self.covered = covered; self.cloud = cloud
     }
 }
 
@@ -381,6 +383,12 @@ public enum BoardReader {
             // テープが縦横に重なって、ドロップがほとんど見えないマス：色は分からないが、ドロップはある
             if let pts = tapePoints[cells.count], pts.count < 8 {
                 cells.append(CellReading(kind: .unknown, confidence: 0.9, color: f.color, covered: true))
+                continue
+            }
+            // 雲：ほとんど白で色味がない（実機：彩度 0.04〜0.06・明るさ 0.85）。ドロップの色は見えないが、ドロップはある。
+            // 動かせるが消えないものとして計算する（お邪魔は青みがかった灰色〜紺色で、ここまで白く明るくない）
+            if f.bodyS < 0.12 && f.bodyV > 0.72 && f.greyBrightRatio >= 0.7 {
+                cells.append(CellReading(kind: .unknown, confidence: 0.9, color: f.color, covered: true, cloud: true))
                 continue
             }
             // 手動修正で覚えた色を優先
@@ -923,7 +931,7 @@ public enum RecognitionDiagnostics {
                 let c = r.cells[row * r.size.cols + col]
                 let (h, s, v) = c.color.hsv
                 cells.append(String(format: "%@ %.2f #%02X%02X%02X h%.0f s%.2f v%.2f",
-                                    c.kind.key, c.confidence, c.color.r, c.color.g, c.color.b, h, s, v))
+                                    c.cloud == true ? "cloud" : c.kind.key, c.confidence, c.color.r, c.color.g, c.color.b, h, s, v))
             }
             lines.append("\(row + 1)段目: " + cells.joined(separator: " | "))
         }

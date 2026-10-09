@@ -136,7 +136,7 @@ struct ContentView: View {
                 }
                 toolPicker
                 BoardView(board: b, confidence: model.confidence, result: model.result, progress: model.progress,
-                          constraints: model.boardConstraints, covered: model.coveredCells,
+                          constraints: model.boardConstraints, covered: model.coveredCells, clouds: model.cloudCells,
                           autoRoulette: model.autoRouletteCells) { i in
                     if model.tapCell(i) {
                         editingCell = i

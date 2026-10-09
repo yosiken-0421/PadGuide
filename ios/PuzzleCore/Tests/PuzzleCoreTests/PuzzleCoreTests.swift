@@ -1222,6 +1222,26 @@ final class TapeTests: XCTestCase {
                                       classifier: ColorClassifier()).taped, "平らなドロップ")
     }
 
+    /// 雲：白い雲に隠れたマスは「色の見えないドロップ」として読み（お邪魔と間違えない）、ほかのマスは正しく読む
+    func testCloudCellsAreHidden() {
+        let board = SyntheticScreen.randomBoard(S65, seed: 714)
+        var (sc, rect) = screen(board)
+        let c = rect.cell
+        for i in [14, 15] {   // 3段目の3列目・4列目に、ふわふわした白い雲（独自デザイン）
+            let cx = (Double(i % 6) + 0.5) * c, cy = rect.y + (Double(i / 6) + 0.5) * c
+            sc.fillCircle(cx: cx, cy: cy, r: c * 0.52, RGB(214, 218, 224))
+            for (dx, dy) in [(-0.2, -0.2), (0.2, -0.15), (-0.15, 0.2), (0.2, 0.2)] {
+                sc.fillCircle(cx: cx + dx * c, cy: cy + dy * c, r: c * 0.28, RGB(232, 235, 240))
+            }
+        }
+        let rd = BoardReader.read(sc, rect: rect, classifier: ColorClassifier())
+        XCTAssertEqual(rd.cells.indices.filter { rd.cells[$0].cloud == true }, [14, 15])
+        XCTAssertEqual(rd.cells[14].kind, .unknown)
+        XCTAssertTrue(rd.isUsable)
+        for i in board.cells.indices where i != 14 && i != 15 { XCTAssertEqual(rd.cells[i].kind, board.cells[i], "マス \(i)") }
+        XCTAssertTrue(RecognitionDiagnostics.text(rd, source: "test", imageSize: nil).contains("cloud"))
+    }
+
     /// ちらつきに左右されない：2 フレーム続けば使い、消えたとみなすのは約 3 秒続けて見えないときだけ
     func testTapeTrackerSmoothsFlicker() {
         var t = TapeTracker()
